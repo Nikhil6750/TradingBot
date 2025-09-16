@@ -1,0 +1,7 @@
+pandas
+numpy
+ta
+python-telegram-bot
+python-dotenv
+yfinance
+psycopg2-binary
