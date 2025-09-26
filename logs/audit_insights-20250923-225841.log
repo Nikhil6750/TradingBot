@@ -1,0 +1,18 @@
+
+=== PF by SYMBOL ===
+symbol  trades  wins  losses  expired     avg_r  net_r       pf  win_rate_%
+GBPAUD      83    38      45        0  0.373494   31.0 1.688889   45.783133
+EURJPY      76    32      43        1  0.276316   21.0 1.488372   42.666667
+EURUSD      45    14      30        1 -0.044444   -2.0 0.933333   31.818182
+
+=== PF by HOUR BUCKET (local) ===
+hour_bucket  trades  wins  losses  expired     avg_r  net_r       pf  win_rate_%
+      12-15       9     4       5        0  0.333333    3.0 1.600000   44.444444
+      15-18      16     4      12        0 -0.250000   -4.0 0.666667   25.000000
+        0-6       0     0       0        0       NaN    0.0      NaN    0.000000
+        6-9       0     0       0        0       NaN    0.0      NaN    0.000000
+       9-12       0     0       0        0       NaN    0.0      NaN    0.000000
+      18-21       0     0       0        0       NaN    0.0      NaN    0.000000
+      21-24       0     0       0        0       NaN    0.0      NaN    0.000000
+
+Saved audit_by_symbol.csv and audit_by_hour.csv

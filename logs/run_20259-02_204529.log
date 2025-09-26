@@ -1,0 +1,62 @@
+>>> BACKTEST_RUNNER BUILD: v3.2 <<<
+[BT] Using threshold=50.0, atr_mult=2.0, rr=2.0, session=ALL (raw='ALL'), tz_offset=-5.5h
+[DEBUG] SYMBOL_ALLOWLIST parsed=['GBPAUD', 'EURJPY', 'EURUSD']
+[DEBUG] Found 7 CSVs in D:\Trading Bot\data
+[DEBUG] skipping FX_CHFJPY, 5_6f905.csv (symbol=CHFJPY) due to SYMBOL_ALLOWLIST=['GBPAUD', 'EURJPY', 'EURUSD']
+[DEBUG] skipping FX_EURGBP, 5_69134.csv (symbol=EURGBP) due to SYMBOL_ALLOWLIST=['GBPAUD', 'EURJPY', 'EURUSD']
+[INFO] Start FX_EURJPY, 5_abeeb.csv (symbol=EURJPY)
+  -> 0 raw signals from 'Pattern Alert' (>= 50.0)
+  -> fallback: 196 synthetic scan points (AUTO_SYNTHETIC_WHEN_EMPTY=1)
+[INFO] Done FX_EURJPY, 5_abeeb.csv: trades=76, W/L/E=32/43/1, PF=1.4883720930232558, NetR=21.000
+[INFO] Start FX_EURUSD, 5_71985.csv (symbol=EURUSD)
+  -> 0 raw signals from 'Pattern Alert' (>= 50.0)
+  -> fallback: 197 synthetic scan points (AUTO_SYNTHETIC_WHEN_EMPTY=1)
+[INFO] Done FX_EURUSD, 5_71985.csv: trades=45, W/L/E=14/30/1, PF=0.9333333333333333, NetR=-2.000
+[INFO] Start FX_GBPAUD, 5_93d11.csv (symbol=GBPAUD)
+  -> no score column found; using synthetic scan points
+  -> fallback: 205 synthetic scan points (AUTO_SYNTHETIC_WHEN_EMPTY=1)
+[INFO] Done FX_GBPAUD, 5_93d11.csv: trades=83, W/L/E=38/45/0, PF=1.6888888888888889, NetR=31.000
+[DEBUG] skipping FX_GBPUSD, 5_6bf0d.csv (symbol=GBPUSD) due to SYMBOL_ALLOWLIST=['GBPAUD', 'EURJPY', 'EURUSD']
+[DEBUG] skipping FX_USDJPY, 5_6f304.csv (symbol=USDJPY) due to SYMBOL_ALLOWLIST=['GBPAUD', 'EURJPY', 'EURUSD']
+
+=== Backtest Summary ===
+Trades       : 204
+Wins/Losses  : 84/118  Expired: 2
+Win Rate     : 41.58%
+Avg R        : 0.245
+ProfitFactor : 1.424
+Net R        : 50.000
+Backtest complete. Results saved to backtest_results.csv
+=== Performance Report (per-trade) ===
+Trades       : 204
+Wins/Losses  : 84/118  Expired: 2
+Win Rate     : 41.58%
+Avg R        : 0.245
+ProfitFactor : 1.424
+Net R        : 50.000
+=== Equity & Risk ===
+Trades       : 204
+Wins/Losses  : 84/118  Expired: 2
+Win Rate     : 41.58%
+Final Equity : 50.000 R
+Max Drawdown : -18.000 R (54.55% of peak)
+Expectancy   : 0.245 R/trade
+Trade Sharpe : 2.373
+
+=== PF by SYMBOL ===
+symbol  trades  wins  losses  expired     avg_r  net_r       pf  win_rate_%
+GBPAUD      83    38      45        0  0.373494   31.0 1.688889   45.783133
+EURJPY      76    32      43        1  0.276316   21.0 1.488372   42.666667
+EURUSD      45    14      30        1 -0.044444   -2.0 0.933333   31.818182
+
+=== PF by HOUR BUCKET (local) ===
+hour_bucket  trades  wins  losses  expired     avg_r  net_r       pf  win_rate_%
+      12-15       9     4       5        0  0.333333    3.0 1.600000   44.444444
+      15-18      16     4      12        0 -0.250000   -4.0 0.666667   25.000000
+        0-6       0     0       0        0       NaN    0.0      NaN    0.000000
+        6-9       0     0       0        0       NaN    0.0      NaN    0.000000
+       9-12       0     0       0        0       NaN    0.0      NaN    0.000000
+      18-21       0     0       0        0       NaN    0.0      NaN    0.000000
+      21-24       0     0       0        0       NaN    0.0      NaN    0.000000
+
+Saved audit_by_symbol.csv and audit_by_hour.csv

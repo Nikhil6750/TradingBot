@@ -1,60 +1,38 @@
-import os
-import csv
-from datetime import datetime
+# bot/logger.py
+import os, csv
+import pandas as pd
+from bot.config import RESULTS_PATH
 
-RESULTS_FILE = os.path.join("data", "results.csv")
+# Keep a clear schema
+HEADERS = [
+    "timestamp","file","timeframe","bar_time","score","label","sent","direction",
+    "entry_price","sl","tp",
+    "trend_ok","momentum_ok","sr_ok",
+    "EMA_20","EMA_50","RSI_14","ATR_14",
+    "outcome","max_bars","exit_price","bars_held","resolved_time"
+]
 
-def log_result(filepath, score, label, sent, factors, df):
-    """
-    Append a row to results.csv with trade info, including SL/TP.
-    """
-    # Ensure file exists with header
-    file_exists = os.path.isfile(RESULTS_FILE)
+def ensure_header():
+    # Don't overwrite if file already exists
+    if not os.path.exists(RESULTS_PATH) or os.path.getsize(RESULTS_PATH) == 0:
+        with open(RESULTS_PATH, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow(HEADERS)
 
-    # Grab last candle data
-    last_row = df.iloc[-1]
-    close = last_row["close"]
-    ema20 = last_row.get("EMA_20", None)
-    ema50 = last_row.get("EMA_50", None)
-    rsi14 = last_row.get("RSI_14", None)
-    atr14 = last_row.get("ATR_14", None)
-
-    # Define direction: simple rule → EMA20 > EMA50 = BUY else SELL
-    direction = "BUY" if ema20 > ema50 else "SELL"
-
-    # Stop Loss & Take Profit using ATR multiplier
-    if direction == "BUY":
-        sl = close - 1.5 * atr14 if atr14 else None
-        tp = close + 3.0 * atr14 if atr14 else None
-    else:
-        sl = close + 1.5 * atr14 if atr14 else None
-        tp = close - 3.0 * atr14 if atr14 else None
-
-    row = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "file": os.path.basename(filepath),
-        "timeframe": factors.get("timeframe", ""),
-        "bar_time": factors.get("bar_time", ""),
-        "score": score,
-        "label": label,
-        "sent": sent,
-        "direction": direction,
-        "entry_price": close,
-        "sl": sl,
-        "tp": tp,
-        "trend_ok": factors.get("trend_ok", ""),
-        "momentum_ok": factors.get("momentum_ok", ""),
-        "sr_ok": factors.get("sr_ok", ""),
-        "EMA_20": ema20,
-        "EMA_50": ema50,
-        "RSI_14": rsi14,
-        "ATR_14": atr14,
-        "outcome": ""  # leave empty, will be updated later
-    }
-
-    # Write header if file doesn’t exist
-    with open(RESULTS_FILE, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=row.keys())
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(row)
+def log_result(path, pair, timeframe, bar_time, score, label, sent, row, factors,
+               entry_price, sl, tp, max_bars=None):
+    ensure_header()
+    now = pd.Timestamp.now().isoformat(timespec="seconds")
+    mb = max_bars if max_bars is not None else ""
+    with open(RESULTS_PATH, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow([
+            now, os.path.basename(path), timeframe, bar_time, round(float(score),1), label, bool(sent),
+            factors.get("direction"),
+            round(float(entry_price),5), round(float(sl),5), round(float(tp),5),
+            int(bool(factors.get("trend_ok", False))),
+            int(bool(factors.get("momentum_ok", False))),
+            int(bool(factors.get("sr_ok", False))),
+            round(float(row["EMA_20"]),5), round(float(row["EMA_50"]),5),
+            round(float(row["RSI_14"]),2), round(float(row["ATR_14"]),5),
+            "", mb, "", "", ""
+        ])

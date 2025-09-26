@@ -5,3 +5,10 @@ python-telegram-bot
 python-dotenv
 yfinance
 psycopg2-binary
+streamlit
+pandas
+numpy
+python-dotenv
+matplotlib
+python-dateutil
+pytz

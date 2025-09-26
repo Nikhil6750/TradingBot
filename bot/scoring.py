@@ -1,58 +1,30 @@
-import pandas as pd
-
-def _get(row, candidates):
-    for k in candidates:
-        if k in row and pd.notna(row[k]):
-            return row[k]
-    return None
+# bot/scoring.py
 
 def compute_score(row):
     """
-    Returns (score_float, label_str, factors_dict)
+    Returns:
+      score: float 0..100
+      label: LOW / MEDIUM / HIGH
+      factors: dict {trend_ok, momentum_ok, sr_ok, direction}
+    Requires: close, EMA_20, EMA_50, RSI_14, ATR_14
     """
-    ema20 = _get(row, ["EMA20", "ema20", "EMA_20", "ema_20"])
-    ema50 = _get(row, ["EMA50", "ema50", "EMA_50", "ema_50"])
-    rsi = _get(row, ["RSI14", "rsi14", "RSI_14", "rsi_14"])
-    atr = _get(row, ["ATR14", "atr14", "ATR_14", "atr_14"])
-    close = _get(row, ["close", "Close", "close_price"])
+    ema20, ema50 = row["EMA_20"], row["EMA_50"]
+    rsi, close, atr = row["RSI_14"], row["close"], row["ATR_14"]
 
-    direction = row.get("direction")
-    if direction is None:
-        if ema20 is not None and ema50 is not None:
-            direction = "BUY" if ema20 > ema50 else "SELL"
-        else:
-            direction = "BUY"
+    trend_ok    = bool(ema20 > ema50)
+    momentum_ok = bool(35 <= rsi <= 65)
+    sr_ok       = bool(abs(close - ema20) <= 0.25 * atr)
 
-    trend_ok = 1 if (ema20 is not None and ema50 is not None and (
-        (direction == "BUY" and ema20 > ema50) or
-        (direction == "SELL" and ema20 < ema50))) else 0
+    direction = "BUY" if trend_ok else "SELL"
 
-    momentum_ok = 1 if (rsi is not None and 30 <= rsi <= 70) else 0
+    # weights: trend=3, momentum=3, sr=2 (total 8)
+    raw = (3*trend_ok + 3*momentum_ok + 2*sr_ok)
+    score = round((raw / 8) * 100, 1)
+    label = "HIGH" if score >= 75 else ("MEDIUM" if score >= 50 else "LOW")
 
-    sr_ok = 0
-    try:
-        if close is not None and ema20 is not None:
-            sr_ok = 1 if abs(close - ema20) / ema20 <= 0.01 else 0
-    except Exception:
-        sr_ok = 0
-
-    weights = {"trend": 3, "momentum": 3, "sr": 2}
-    total_w = sum(weights.values())
-    score = (trend_ok * weights["trend"] +
-             momentum_ok * weights["momentum"] +
-             sr_ok * weights["sr"]) / total_w * 100
-
-    if score >= 70:
-        label = "HIGH"
-    elif score >= 40:
-        label = "MEDIUM"
-    else:
-        label = "LOW"
-
-    factors = {
-        "trend_ok": bool(trend_ok),
-        "momentum_ok": bool(momentum_ok),
-        "sr_ok": bool(sr_ok),
+    return score, label, {
+        "trend_ok": trend_ok,
+        "momentum_ok": momentum_ok,
+        "sr_ok": sr_ok,
         "direction": direction
     }
-    return score, label, factors
