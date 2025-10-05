@@ -12,3 +12,10 @@ python-dotenv
 matplotlib
 python-dateutil
 pytz
+streamlit
+requests
+beautifulsoup4
+lxml
+pandas
+python-dateutil
+python-dotenv
