@@ -1,10 +1,15 @@
 from __future__ import annotations
-import io, os, glob
-from typing import Optional, List
+import io, os, glob, base64
+from typing import Optional, List, Dict
 from dataclasses import dataclass
+
+# near your other imports
+from agent.tools import router as tools_router
+from agent.agent import router as agent_router
 
 import numpy as np
 import pandas as pd
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -14,26 +19,39 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from urllib.parse import quote, unquote
+from datetime import datetime
+import os, sys
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# App & CORS
+# ─────────────────────────────────────────────────────────────────────────────
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-app = FastAPI(title="Trading Bot API", version="2.5.0")
+app = FastAPI(title="Trading Bot API", version="3.1.0")
+# Mount agent + tool routers
+app.include_router(tools_router)
+app.include_router(agent_router)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*", "http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*","http://localhost:5173","http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -------------------- helpers --------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
 def _parse_hour_allow(hour_allow: str) -> tuple[int, int]:
     try:
         a, b = map(int, str(hour_allow).split("-"))
         a = min(max(a, 0), 23)
         b = min(max(b, 1), 24)  # end exclusive
-        if a == b:
-            return (0, 24)
+        if a == b: return (0, 24)
         return (a, b)
     except Exception:
         return (0, 24)
@@ -60,34 +78,24 @@ def _coerce_time_any(s: pd.Series) -> pd.Series:
     return pd.to_datetime(s, utc=True, errors="coerce")
 
 def _ensure_ohlc(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize OHLC/time, coerce numeric, sort by time, and attach a stable time index (tidx)."""
+    """Normalize columns, numeric coercion, sort by time, attach time-sorted index (tidx)."""
     lower = {c.lower(): c for c in df.columns}
-    need = ["time", "open", "high", "low", "close"]
-    for k in need:
+    for k in ["time","open","high","low","close"]:
         if k not in lower:
             raise ValueError(f"Missing '{k}' in CSV")
-
     df = df.rename(columns={
-        lower["time"]: "time",
-        lower["open"]: "open",
-        lower["high"]: "high",
-        lower["low"]: "low",
-        lower["close"]: "close",
+        lower["time"]:"time", lower["open"]:"open",
+        lower["high"]:"high", lower["low"]:"low", lower["close"]:"close"
     })
-
-    for k in ["open", "high", "low", "close"]:
+    for k in ["open","high","low","close"]:
         df[k] = pd.to_numeric(df[k], errors="coerce")
     df["time"] = _coerce_time_any(df["time"])
-    df = df.dropna(subset=["time", "open", "high", "low", "close"])\
-           .sort_values("time")\
-           .reset_index(drop=True)
-
-    # Monotonic, time-sorted index used everywhere
-    df["tidx"] = np.arange(len(df), dtype=int)
+    df = df.dropna(subset=["time","open","high","low","close"])\
+           .sort_values("time").reset_index(drop=True)
+    df["tidx"] = np.arange(len(df), dtype=int)  # monotonic, time-sorted anchor
     return df
 
-
-def _png_error(msg: str) -> StreamingResponse:
+def _png_error_bytes(msg: str) -> bytes:
     fig, ax = plt.subplots(figsize=(6, 1.5))
     ax.axis("off")
     ax.text(0.02, 0.5, msg, fontsize=10, va="center", ha="left")
@@ -95,29 +103,30 @@ def _png_error(msg: str) -> StreamingResponse:
     plt.tight_layout()
     plt.savefig(buf, format="png", bbox_inches="tight")
     plt.close(fig)
-    buf.seek(0)
-    return StreamingResponse(buf, media_type="image/png", headers={"Cache-Control": "no-store"})
+    return buf.getvalue()
 
-# -------------------- patterns --------------------
-def _body(o, c): return abs(float(c) - float(o))
-def _upper(o, h, c): return float(h) - max(float(o), float(c))
-def _lower(o, l, c): return min(float(o), float(c)) - float(l)
+# ─────────────────────────────────────────────────────────────────────────────
+# Patterns
+# ─────────────────────────────────────────────────────────────────────────────
+def _body(o, c): return abs(float(c)-float(o))
+def _upper(o, h, c): return float(h)-max(float(o),float(c))
+def _lower(o, l, c): return min(float(o),float(c))-float(l)
 
 def is_bullish_engulfing(o1,h1,l1,c1, o2,h2,l2,c2):
-    return (c1 < o1) and (c2 > o2) and (o2 <= c1) and (c2 >= o1)
+    return (c1<o1) and (c2>o2) and (o2<=c1) and (c2>=o1)
 
 def is_bearish_engulfing(o1,h1,l1,c1, o2,h2,l2,c2):
-    return (c1 > o1) and (c2 < o2) and (o2 >= c1) and (c2 <= o1)
+    return (c1>o1) and (c2<o2) and (o2>=c1) and (c2<=o1)
 
 def is_hammer(o,h,l,c):
-    b = _body(o,c)
-    return (_lower(o,l,c) >= 2*b) and (_upper(o,h,c) <= b*0.5)
+    b=_body(o,c); return (_lower(o,l,c)>=2*b) and (_upper(o,h,c)<=0.5*b)
 
 def is_shooting_star(o,h,l,c):
-    b = _body(o,c)
-    return (_upper(o,h,c) >= 2*b) and (_lower(o,l,c) <= b*0.5)
+    b=_body(o,c); return (_upper(o,h,c)>=2*b) and (_lower(o,l,c)<=0.5*b)
 
-# -------------------- outcome --------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Outcome evaluator (position-based using tidx)
+# ─────────────────────────────────────────────────────────────────────────────
 @dataclass
 class OutcomeParams:
     tp_pips: float = 10.0
@@ -126,70 +135,109 @@ class OutcomeParams:
     fill: str = "next_open"          # or "close"
     hit_order: str = "conservative"  # reserved
 
-
 def _pip_point_for_symbol(sym: str, df: pd.DataFrame) -> float:
     try:
         s = (df["close"].astype(float).round(10)).diff().abs()
-        step = s.replace(0, s[s > 0].min()).head(200).min()
-        if pd.isna(step) or step == 0:
+        step = s.replace(0, s[s>0].min()).head(200).min()
+        if pd.isna(step) or step==0:
             return 0.001 if sym.endswith("JPY") else 0.0001
-        for p in [0.00001, 0.0001, 0.001, 0.01]:
-            if step >= p:
-                return p
+        for p in [0.00001,0.0001,0.001,0.01]:
+            if step >= p: return p
         return step
     except Exception:
         return 0.001 if sym.endswith("JPY") else 0.0001
 
-
 def evaluate_trade_pos(df: pd.DataFrame, entry_pos: int, side: str, entry_price: float, params: OutcomeParams):
-    """Evaluate outcome iterating by *row position* (tidx)."""
-    sym = df.attrs.get("symbol", "UNKNOWN")
+    sym = df.attrs.get("symbol","UNKNOWN")
     point = _pip_point_for_symbol(sym, df)
-    tp = params.tp_pips * point
-    sl = params.sl_pips * point
+    tp, sl = params.tp_pips*point, params.sl_pips*point
+    target, stop = (entry_price+tp, entry_price-sl) if side=="LONG" else (entry_price-tp, entry_price+sl)
 
-    if side == "LONG":
-        target, stop = entry_price + tp, entry_price - sl
-    else:
-        target, stop = entry_price - tp, entry_price + sl
-
-    last_pos = min(len(df) - 1, entry_pos + params.max_hold_bars)
-    outcome = "timeout"
-    exit_price = float(df.iloc[last_pos]["close"])
+    last_pos = min(len(df)-1, entry_pos + params.max_hold_bars)
+    outcome, exit_price = "timeout", float(df.iloc[last_pos]["close"])
     exit_time = pd.to_datetime(df.iloc[last_pos]["time"]).to_pydatetime()
 
-    for i in range(entry_pos + 1, last_pos + 1):
-        bar = df.iloc[i]
-        lo, hi = float(bar["low"]), float(bar["high"])
-        if side == "LONG":
-            if lo <= stop:
-                outcome, exit_price = "loss", stop
-                exit_time = pd.to_datetime(bar["time"]).to_pydatetime()
-                break
-            if hi >= target:
-                outcome, exit_price = "win", target
-                exit_time = pd.to_datetime(bar["time"]).to_pydatetime()
-                break
+    for i in range(entry_pos+1, last_pos+1):
+        bar = df.iloc[i]; lo, hi = float(bar["low"]), float(bar["high"])
+        if side=="LONG":
+            if lo<=stop: outcome, exit_price, exit_time = "loss", stop, pd.to_datetime(bar["time"]).to_pydatetime(); break
+            if hi>=target: outcome, exit_price, exit_time = "win", target, pd.to_datetime(bar["time"]).to_pydatetime(); break
         else:
-            if hi >= stop:
-                outcome, exit_price = "loss", stop
-                exit_time = pd.to_datetime(bar["time"]).to_pydatetime()
-                break
-            if lo <= target:
-                outcome, exit_price = "win", target
-                exit_time = pd.to_datetime(bar["time"]).to_pydatetime()
-                break
+            if hi>=stop: outcome, exit_price, exit_time = "loss", stop, pd.to_datetime(bar["time"]).to_pydatetime(); break
+            if lo<=target: outcome, exit_price, exit_time = "win", target, pd.to_datetime(bar["time"]).to_pydatetime(); break
 
     risk = max(sl, 1e-12)
-    r_mult = round(((exit_price - entry_price) if side == "LONG" else (entry_price - exit_price)) / risk, 2)
-    return {"outcome": outcome, "exit_time": exit_time, "exit_price": round(exit_price, 6), "r_multiple": r_mult}
+    r_mult = round(((exit_price-entry_price) if side=="LONG" else (entry_price-exit_price))/risk, 2)
+    return {"outcome": outcome, "exit_time": exit_time, "exit_price": round(exit_price,6), "r_multiple": r_mult}
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Inline chart renderer (returns PNG bytes)
+# ─────────────────────────────────────────────────────────────────────────────
+def render_candles_png(df: pd.DataFrame, center_pos: int, bars: int, tz: str, symbol: str, reason: Optional[str]) -> bytes:
+    try:
+        bars = max(10, int(bars))
+        center_pos = int(np.clip(int(center_pos), 0, len(df)-1))
+        half = bars // 2
+        lo = max(0, center_pos-half)
+        hi = min(len(df), center_pos+half)
+        if hi <= lo:
+            return _png_error_bytes("Empty window")
 
-# -------------------- models --------------------
+        win = df.iloc[lo:hi].copy().reset_index(drop=True)
+
+        # local time ticks
+        try:
+            win["time_local"] = pd.to_datetime(win["time"]).dt.tz_convert(tz)
+        except Exception:
+            win["time_local"] = pd.to_datetime(win["time"])
+
+        anchor_ts = pd.to_datetime(df.iloc[center_pos]["time"]).tz_convert("UTC")
+
+        buf = io.BytesIO()
+        fig, ax = plt.subplots(figsize=(8, 4))
+        x = np.arange(len(win))
+
+        # draw candles
+        for i, r in enumerate(win.itertuples(index=False)):
+            o, h, l, c = float(r.open), float(r.high), float(r.low), float(r.close)
+            color = "#22c55e" if c >= o else "#ef4444"
+            ax.vlines(i, l, h, color=color, linewidth=1.2)
+            body_y = min(o, c)
+            body_h = max(1e-10, abs(c-o))
+            ax.add_patch(plt.Rectangle((i-0.3, body_y), 0.6, body_h, color=color, alpha=0.9, linewidth=0))
+
+        # highlight anchor candle
+        ax.axvline(int(np.clip(center_pos-lo, 0, len(win)-1)), color="#3b82f6", linewidth=1.0, alpha=0.6)
+
+        # axes cosmetics
+        ax.set_xlim(-1, len(win))
+        step = max(1, len(x)//6)
+        ax.set_xticks(x[::step])
+        ax.set_xticklabels([t.strftime("%H:%M") for t in win["time_local"].iloc[::step]], rotation=30, ha="right", fontsize=8)
+
+        ymin, ymax = float(win["low"].min()), float(win["high"].max())
+        pad = (ymax - ymin) * 0.05 if ymax > ymin else 0.0001
+        ax.set_ylim(ymin - pad, ymax + pad)
+
+        # Title without pattern text
+        ttl = f"{symbol.upper()} {anchor_ts.strftime('%Y-%m-%d %H:%M UTC')}"
+        ax.set_title(ttl, fontsize=10, weight="bold")
+
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(buf, format="png", bbox_inches="tight")
+        plt.close(fig)
+        return buf.getvalue()
+    except Exception as e:
+        return _png_error_bytes(f"Plot error: {e}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API models
+# ─────────────────────────────────────────────────────────────────────────────
 class BacktestRunReq(BaseModel):
     symbol: str
-    hour_allow: str = "0-24"      # end exclusive
-    date: Optional[str] = None    # YYYY-MM-DD (UTC)
+    hour_allow: str = "0-24"     # end exclusive
+    date: Optional[str] = None   # YYYY-MM-DD (UTC)
     tp_pips: float = 10.0
     sl_pips: float = 10.0
     max_hold_bars: int = 12
@@ -200,7 +248,44 @@ class BacktestRunReq(BaseModel):
     tz: str = "UTC"
     bars_plot: int = 40
 
-# -------------------- routes --------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Minimal tool targets for the agent (safe defaults)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/prices/get")
+def prices_get(payload: dict):
+    """
+    Stub for prices. Replace with your real data source later.
+    Expected keys: symbol, timeframe, limit
+    """
+    return {
+        "symbol": (payload or {}).get("symbol"),
+        "timeframe": (payload or {}).get("timeframe", "1h"),
+        "bars": [],   # TODO: fill from your CSV/feeder
+        "limit": (payload or {}).get("limit", 200),
+    }
+
+@app.post("/orders/paper/place")
+def paper_place(payload: dict):
+    """
+    Paper-order endpoint only. Live trading is intentionally not supported here.
+    The agent’s policy defaults to PAPER; keep it that way.
+    """
+    order = {
+        "symbol": (payload or {}).get("symbol"),
+        "side": (payload or {}).get("side"),
+        "qty": (payload or {}).get("qty"),
+        "order_type": (payload or {}).get("order_type", "market"),
+        "limit_price": (payload or {}).get("limit_price"),
+        "mode": "paper",
+        "status": "accepted",
+    }
+    return order
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Routes — Backtest
+# ─────────────────────────────────────────────────────────────────────────────
 @app.post("/backtest/run")
 def backtest_run(req: BacktestRunReq):
     sym = req.symbol.upper().strip()
@@ -212,16 +297,16 @@ def backtest_run(req: BacktestRunReq):
         df_full = _ensure_ohlc(pd.read_csv(path))
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
     df_full.attrs["symbol"] = sym
 
-    # --- filter by date/hour but KEEP tidx from full df ---
+    # filter by date/hour but keep tidx from full df
     df_filt = df_full
     if req.date:
         d = pd.to_datetime(req.date).date()
         df_filt = df_filt[df_filt["time"].dt.date == d]
         if df_filt.empty:
             return JSONResponse({"ok": False, "error": f"No data for {req.date}"}, status_code=404)
-
     h0, h1 = _parse_hour_allow(req.hour_allow)
     df_filt = df_filt[(df_filt["time"].dt.hour >= h0) & (df_filt["time"].dt.hour < h1)]
     if df_filt.empty:
@@ -230,42 +315,41 @@ def backtest_run(req: BacktestRunReq):
     df_filt = df_filt.reset_index(drop=True)
     params = OutcomeParams(req.tp_pips, req.sl_pips, req.max_hold_bars, req.fill, req.hit_order)
 
-    alerts = []
+    alerts: List[dict] = []
     last_signal_i = -10**9
 
     for i in range(1, len(df_filt)):
-        p, c = df_filt.iloc[i - 1], df_filt.iloc[i]
+        p, c = df_filt.iloc[i-1], df_filt.iloc[i]
         reason, side = None, None
 
-        if is_bullish_engulfing(p["open"], p["high"], p["low"], p["close"], c["open"], c["high"], c["low"], c["close"]):
+        if is_bullish_engulfing(p["open"],p["high"],p["low"],p["close"], c["open"],c["high"],c["low"],c["close"]):
             reason, side = "bullish_engulfing", "LONG"
-        elif is_bearish_engulfing(p["open"], p["high"], p["low"], p["close"], c["open"], c["high"], c["low"], c["close"]):
+        elif is_bearish_engulfing(p["open"],p["high"],p["low"],p["close"], c["open"],c["high"],c["low"],c["close"]):
             reason, side = "bearish_engulfing", "SHORT"
-        elif is_hammer(c["open"], c["high"], c["low"], c["close"]):
+        elif is_hammer(c["open"],c["high"],c["low"],c["close"]):
             reason, side = "hammer", "LONG"
-        elif is_shooting_star(c["open"], c["high"], c["low"], c["close"]):
+        elif is_shooting_star(c["open"],c["high"],c["low"],c["close"]):
             reason, side = "shooting_star", "SHORT"
         else:
             continue
 
-        # cooldown to avoid clusters
         if i - last_signal_i < max(0, int(req.cooldown_bars)):
             continue
         last_signal_i = i
 
-        t_utc  = pd.to_datetime(c["time"], utc=True)
-        tidx   = int(c["tidx"])                        # anchor in FULL df (time-sorted)
-        entry_pos = min(tidx + 1, len(df_full) - 1)    # next bar (position in full df)
-
-        entry_px = float(df_full.iloc[entry_pos]["open"]) if params.fill == "next_open" else float(c["close"])
+        t_utc = pd.to_datetime(c["time"], utc=True)
+        tidx = int(c["tidx"])
+        entry_pos = min(tidx + 1, len(df_full)-1)
+        entry_px = float(df_full.iloc[entry_pos]["open"]) if params.fill=="next_open" else float(c["close"])
         outc = evaluate_trade_pos(df_full, entry_pos, side, entry_px, params)
 
-        qt = quote(t_utc.isoformat())
-        plot_qs = f"/backtest/plot?symbol={sym}&tidx={tidx}&tz={req.tz}&bars={max(10, int(req.bars_plot))}&reason={reason}&time={qt}"
+        # inline chart (base64)
+        png_bytes = render_candles_png(df_full, center_pos=tidx, bars=req.bars_plot, tz=req.tz, symbol=sym, reason=reason)
+        b64 = base64.b64encode(png_bytes).decode("ascii")
 
+        qt = quote(t_utc.isoformat())
         alerts.append({
             "time": t_utc.isoformat(),
-            "row_index": i,
             "tidx": tidx,
             "side": side,
             "reason": reason,
@@ -275,7 +359,8 @@ def backtest_run(req: BacktestRunReq):
             "outcome": outc["outcome"],
             "r_multiple": outc["r_multiple"],
             "take": (outc["outcome"] == "win"),
-            "plot_url": plot_qs,
+            "plot_data_url": f"data:image/png;base64,{b64}",
+            "plot_url": f"/backtest/plot?symbol={sym}&tidx={tidx}&time={qt}&tz={req.tz}&bars={req.bars_plot}&reason={reason}"
         })
         if len(alerts) >= req.max_alerts:
             break
@@ -284,7 +369,7 @@ def backtest_run(req: BacktestRunReq):
     wins = sum(a["outcome"] == "win" for a in alerts)
     losses = sum(a["outcome"] == "loss" for a in alerts)
     timeouts = sum(a["outcome"] == "timeout" for a in alerts)
-    win_rate = round(100 * wins / max(trades, 1), 2)
+    win_rate = round(100 * wins / max(trades,1), 2)
 
     return {
         "ok": True,
@@ -294,7 +379,7 @@ def backtest_run(req: BacktestRunReq):
         "alerts": alerts,
     }
 
-
+# Classic plotting endpoint (debug/manual)
 @app.get("/backtest/plot")
 def backtest_plot(
     symbol: str = Query(...),
@@ -306,74 +391,92 @@ def backtest_plot(
 ):
     path = _find_csv(symbol)
     if not path:
-        return _png_error(f"No CSV for {symbol}")
-
+        return StreamingResponse(io.BytesIO(_png_error_bytes(f"No CSV for {symbol}")), media_type="image/png")
     try:
         df = _ensure_ohlc(pd.read_csv(path))
     except Exception as e:
-        return _png_error(str(e))
-    if df.empty:
-        return _png_error("No rows to plot")
+        return StreamingResponse(io.BytesIO(_png_error_bytes(str(e))), media_type="image/png")
 
-    # Center by time-sorted index (tidx). Fallback to time if missing.
     if tidx is not None:
-        center_pos = int(np.clip(int(tidx), 0, len(df) - 1))
+        center_pos = int(np.clip(int(tidx), 0, len(df)-1))
     else:
         if not time:
-            return _png_error("Missing tidx/time")
+            return StreamingResponse(io.BytesIO(_png_error_bytes("Missing tidx/time")), media_type="image/png")
         t_utc = pd.to_datetime(unquote(time).strip(), utc=True, errors="coerce")
         if pd.isna(t_utc):
-            return _png_error("Bad 'time'")
+            return StreamingResponse(io.BytesIO(_png_error_bytes("Bad 'time'")), media_type="image/png")
         center_pos = int((df["time"] - t_utc).abs().argmin())
 
-    half = max(1, int(bars) // 2)
-    lo = max(0, center_pos - half)
-    hi = min(len(df), center_pos + half)
-    if hi <= lo:
-        return _png_error("Empty window")
+    png = render_candles_png(df, center_pos, bars, tz, symbol, reason)
+    return StreamingResponse(io.BytesIO(png), media_type="image/png", headers={"Cache-Control":"no-store"})
 
-    win = df.iloc[lo:hi].copy().reset_index(drop=True)
+# Verify endpoint (batch)
+class VerifyReq(BaseModel):
+    symbol: str
+    items: List[Dict[str, str]]  # [{"time": "<iso>", "reason": "bearish_engulfing"}, ...]
 
+@app.post("/backtest/verify")
+def backtest_verify(req: VerifyReq):
+    path = _find_csv(req.symbol)
+    if not path:
+        return JSONResponse({"ok": False, "error": f"No CSV found for {req.symbol}"}, status_code=404)
     try:
-        win["time_local"] = pd.to_datetime(win["time"]).dt.tz_convert(tz)
-    except Exception:
-        win["time_local"] = pd.to_datetime(win["time"])
+        df = _ensure_ohlc(pd.read_csv(path))
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-    anchor_ts = pd.to_datetime(df.iloc[center_pos]["time"]).tz_convert("UTC")
+    out = []
+    for it in req.items:
+        t_raw = (it.get("time") or "").strip()
+        expected = (it.get("reason") or "").strip()
+        if not t_raw:
+            out.append({"time": t_raw, "expected": expected, "ok": False, "detected": None, "match": "none"})
+            continue
 
-    buf = io.BytesIO()
-    fig, ax = plt.subplots(figsize=(8, 4))
-    x = np.arange(len(win))
-    for i, r in enumerate(win.itertuples(index=False)):
-        o, h, l, c = float(r.open), float(r.high), float(r.low), float(r.close)
-        color = "#22c55e" if c >= o else "#ef4444"
-        ax.vlines(i, l, h, color=color, linewidth=1.2)
-        body_y = min(o, c)
-        body_h = max(1e-10, abs(c - o))
-        ax.add_patch(plt.Rectangle((i - 0.3, body_y), 0.6, body_h, color=color, alpha=0.9, linewidth=0))
+        t_utc = pd.to_datetime(t_raw, utc=True, errors="coerce")
+        if pd.isna(t_utc):
+            out.append({"time": t_raw, "expected": expected, "ok": False, "detected": None, "match": "bad_time"})
+            continue
 
-    ax.axvline(int(np.clip(center_pos - lo, 0, len(win) - 1)), color="#3b82f6", linewidth=1.0, alpha=0.6)
-    ax.set_xlim(-1, len(win))
-    step = max(1, len(x) // 6)
-    ax.set_xticks(x[::step])
-    ax.set_xticklabels([t.strftime("%H:%M") for t in win["time_local"].iloc[::step]],
-                       rotation=30, ha="right", fontsize=8)
+        idxs = df.index[df["time"] == t_utc]
+        if len(idxs) == 0:
+            i = int((df["time"] - t_utc).abs().argmin())
+            match = "nearest"
+        else:
+            i = int(idxs[0])
+            match = "exact"
 
-    ymin, ymax = float(win["low"].min()), float(win["high"].max())
-    pad = (ymax - ymin) * 0.05 if ymax > ymin else 0.0001
-    ax.set_ylim(ymin - pad, ymax + pad)
+        cur = df.iloc[i]
+        prev = df.iloc[i-1] if i > 0 else None
 
-    ttl = f"{symbol.upper()} {anchor_ts.strftime('%Y-%m-%d %H:%M UTC')}"
-    if reason: ttl += f" • {reason}"
-    ax.set_title(ttl, fontsize=10, weight="bold")
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    return StreamingResponse(buf, media_type="image/png", headers={"Cache-Control": "no-store"})
+        det = None
+        if prev is not None:
+            if is_bullish_engulfing(prev["open"],prev["high"],prev["low"],prev["close"],
+                                     cur["open"],cur["high"],cur["low"],cur["close"]):
+                det = "bullish_engulfing"
+            elif is_bearish_engulfing(prev["open"],prev["high"],prev["low"],prev["close"],
+                                       cur["open"],cur["high"],cur["low"],cur["close"]):
+                det = "bearish_engulfing"
 
+        if det is None:
+            if is_hammer(cur["open"],cur["high"],cur["low"],cur["close"]):
+                det = "hammer"
+            elif is_shooting_star(cur["open"],cur["high"],cur["low"],cur["close"]):
+                det = "shooting_star"
 
+        ok = (expected == det)
+        out.append({
+            "time": t_utc.isoformat(),
+            "expected": expected,
+            "detected": det,
+            "ok": bool(ok),
+            "match": match,
+            "row_index": int(i),
+        })
+
+    return {"ok": True, "results": out}
+
+# Utility endpoints
 @app.get("/symbols")
 def list_symbols():
     if not os.path.isdir(DATA_DIR):
@@ -382,8 +485,7 @@ def list_symbols():
     for f in sorted(os.listdir(DATA_DIR)):
         if f.lower().endswith(".csv"):
             s = f.replace("FX_", "").split(",")[0].strip()
-            if s and s not in syms:
-                syms.append(s)
+            if s and s not in syms: syms.append(s)
     return {"symbols": syms}
 
 @app.get("/csv/debug")
@@ -405,3 +507,121 @@ def csv_debug(symbol: str, n: int = 5):
         "first_5_rows": df.head(n).to_dict(orient="records"),
         "last_5_rows": df.tail(n).to_dict(orient="records"),
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 📈 NEWS / ECONOMIC CALENDAR (Investing.com via jobs/fetch_investing_calendar.py)
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: ensure you have jobs/fetch_investing_calendar.py (requests+bs4 version) in place.
+
+# ── SAFE CALENDAR ENDPOINTS (replace your existing ones) ─────────────────────
+from fastapi import Query
+import traceback, pandas as pd, os
+from datetime import datetime
+from typing import Optional, List
+
+# import your scraper
+from jobs.fetch_investing_calendar import (
+    fetch_investing_calendar, filter_events, save_csv,
+    NEWS_TZ, NEWS_MIN_IMPACT, NEWS_LOOKAHEAD_HRS, NEWS_CURRENCIES, NEWS_OUTPUT_DIR
+)
+
+def _csv_list(s: Optional[str]) -> List[str]:
+    if not s: return []
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+def _load_csv_if_exists(date_str: str) -> Optional[pd.DataFrame]:
+    """Read data/calendar/YYYY-MM-DD.csv if present; else return None."""
+    path = os.path.join(NEWS_OUTPUT_DIR, f"{date_str}.csv")
+    if os.path.isfile(path):
+        try:
+            df = pd.read_csv(path)
+            # keep schema predictable
+            cols = ["date","time_local","time_utc","currency","impact","event","actual","forecast","previous","source"]
+            for c in cols:
+                if c not in df.columns: df[c] = None
+            return df[cols]
+        except Exception:
+            traceback.print_exc()
+    return None
+
+def _safe_fetch(date_str: str, tz: str) -> pd.DataFrame:
+    """
+    1) Try CSV cache first (if you ran the job manually).
+    2) Else try live scrape.
+    Always returns a DataFrame (possibly empty), never raises.
+    """
+    try:
+        df = _load_csv_if_exists(date_str)
+        if df is not None:
+            return df
+
+        df = fetch_investing_calendar(date_str, local_tz=tz)
+        return df if df is not None else pd.DataFrame()
+    except Exception:
+        traceback.print_exc()
+        # Return empty DF so UI stays happy
+        return pd.DataFrame(columns=["date","time_local","time_utc","currency","impact","event","actual","forecast","previous","source"])
+
+@app.get("/calendar/today")
+def calendar_today(
+    currencies: Optional[str] = Query(default=os.getenv("NEWS_CURRENCIES", NEWS_CURRENCIES)),
+    min_impact: str = Query(default=os.getenv("NEWS_MIN_IMPACT", NEWS_MIN_IMPACT)),
+    lookahead_hrs: int = Query(default=int(os.getenv("NEWS_LOOKAHEAD_HRS", str(NEWS_LOOKAHEAD_HRS)))),
+    tz: str = Query(default=os.getenv("NEWS_TZ", NEWS_TZ)),
+    save: bool = Query(default=False),
+):
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    df = _safe_fetch(date_str, tz)
+
+    # optional save (also safe)
+    if save:
+        try: save_csv(df, date_str)
+        except Exception: traceback.print_exc()
+
+    try:
+        cur_list = _csv_list(currencies)
+        out = filter_events(df, currencies=cur_list, min_impact=min_impact,
+                            lookahead_hours=lookahead_hrs, local_tz=tz)
+        return {"date": date_str, "count": int(len(out)), "events": out.to_dict(orient="records")}
+    except Exception as e:
+        traceback.print_exc()
+        # graceful JSON instead of 500
+        return {"date": date_str, "count": 0, "events": [], "error": f"{type(e).__name__}: {e}"}
+
+@app.get("/calendar/by-date")
+def calendar_by_date(
+    date: str = Query(..., description="YYYY-MM-DD"),
+    currencies: Optional[str] = Query(default=os.getenv("NEWS_CURRENCIES", NEWS_CURRENCIES)),
+    min_impact: str = Query(default=os.getenv("NEWS_MIN_IMPACT", NEWS_MIN_IMPACT)),
+    lookahead_hrs: int = Query(default=int(os.getenv("NEWS_LOOKAHEAD_HRS", str(NEWS_LOOKAHEAD_HRS)))),
+    tz: str = Query(default=os.getenv("NEWS_TZ", NEWS_TZ)),
+    save: bool = Query(default=False),
+):
+    df = _safe_fetch(date, tz)
+    if save:
+        try: save_csv(df, date)
+        except Exception: traceback.print_exc()
+
+    try:
+        cur_list = _csv_list(currencies)
+        out = filter_events(df, currencies=cur_list, min_impact=min_impact,
+                            lookahead_hours=lookahead_hrs, local_tz=tz)
+        return {"date": date, "count": int(len(out)), "events": out.to_dict(orient="records")}
+    except Exception as e:
+        traceback.print_exc()
+        return {"date": date, "count": 0, "events": [], "error": f"{type(e).__name__}: {e}"}
+
+from jobs.calendar_utils import make_telegram_summary
+
+@app.get("/calendar/summary")
+def calendar_summary(
+    currencies: str = "USD,EUR,JPY",
+    min_impact: str = "medium",
+    lookahead_hrs: int = 12,
+    tz: str = NEWS_TZ,
+):
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    df = _safe_fetch(date_str, tz)
+    out = filter_events(df, [c.strip() for c in currencies.split(",") if c.strip()],
+                        min_impact=min_impact, lookahead_hours=lookahead_hrs, local_tz=tz)
+    return {"date": date_str, "summary": make_telegram_summary(out, tz)}
