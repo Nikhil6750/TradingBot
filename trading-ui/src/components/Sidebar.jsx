@@ -3,9 +3,9 @@ import { NavLink } from "react-router-dom";
 
 export default function Sidebar() {
   const links = [
-    { name: "Chat", path: "/chat" },
+    // { name: "Chat", path: "/chat" },
     { name: "Backtest", path: "/backtest" },
-    { name: "News", path: "/news" },
+    // { name: "News", path: "/news" },
   ];
 
   return (
@@ -17,8 +17,7 @@ export default function Sidebar() {
             key={l.path}
             to={l.path}
             className={({ isActive }) =>
-              `px-3 py-2 rounded hover:bg-neutral-800 ${
-                isActive ? "bg-neutral-800 font-semibold" : "text-neutral-400"
+              `px-3 py-2 rounded hover:bg-neutral-800 ${isActive ? "bg-neutral-800 font-semibold" : "text-neutral-400"
               }`
             }
           >

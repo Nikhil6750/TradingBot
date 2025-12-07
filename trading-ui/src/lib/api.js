@@ -2,7 +2,7 @@
 
 // Use 127.0.0.1 to avoid IPv6 localhost quirks
 // src/lib/api.js
-export const BASE_URL = "https://trading-bot-api-uhbo.onrender.com";
+export const BASE_URL = "http://localhost:8000";
 
 
 

@@ -29,7 +29,7 @@ if ROOT not in sys.path:
 # ─────────────────────────────────────────────────────────────────────────────
 # App & CORS
 # ─────────────────────────────────────────────────────────────────────────────
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 
 app = FastAPI(title="Trading Bot API", version="3.1.0")
 # Mount agent + tool routers
@@ -813,6 +813,12 @@ def _safe_fetch(date_str: str, tz: str) -> pd.DataFrame:
         traceback.print_exc()
         # Return empty DF so UI stays happy
         return pd.DataFrame(columns=["date","time_local","time_utc","currency","impact","event","actual","forecast","previous","source"])
+
+NEWS_CURRENCIES = "USD,EUR,GBP,JPY,AUD,CAD,CHF,NZD"
+NEWS_MIN_IMPACT = "medium"
+NEWS_LOOKAHEAD_HRS = 24
+NEWS_TZ = "UTC"
+NEWS_OUTPUT_DIR = os.path.join(DATA_DIR, "calendar")
 
 @app.get("/calendar/today")
 def calendar_today(

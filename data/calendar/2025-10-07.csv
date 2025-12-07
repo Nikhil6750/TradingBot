@@ -1,0 +1,59 @@
+date,time_local,time_utc,currency,impact,event,actual,forecast,previous,source
+2025-10-07,01:00,2025-10-06T19:30:00+00:00,JPY,low,Coincident Indicator (MoM)  (Aug),-0.7%,,0.3%,investing
+2025-10-07,01:00,2025-10-06T19:30:00+00:00,JPY,low,Leading Index  (Aug),107.4,107.1,106.1,investing
+2025-10-07,01:00,2025-10-06T19:30:00+00:00,JPY,low,Leading Index (MoM)  (Aug),1.3%,,0.5%,investing
+2025-10-07,02:00,2025-10-06T20:30:00+00:00,GBP,low,Halifax House Price Index (YoY)  (Sep),1.3%,2.2%,2.0%,investing
+2025-10-07,02:00,2025-10-06T20:30:00+00:00,GBP,low,Halifax House Price Index (MoM)  (Sep),-0.3%,0.2%,0.2%,investing
+2025-10-07,02:00,2025-10-06T20:30:00+00:00,EUR,low,German Factory Orders (MoM)  (Aug),-0.8%,1.2%,-2.7%,investing
+2025-10-07,02:00,2025-10-06T20:30:00+00:00,ZAR,low,Foreign Reserves (USD)  (Sep),69.74B,,70.42B,investing
+2025-10-07,02:00,2025-10-06T20:30:00+00:00,ZAR,low,Net FX Reserves  (USD)  (Sep),67.865B,,65.899B,investing
+2025-10-07,02:45,2025-10-06T21:15:00+00:00,EUR,low,French Current Account  (Aug),1.50B,,-1.90B,investing
+2025-10-07,02:45,2025-10-06T21:15:00+00:00,EUR,low,French Exports  (Aug),51.8B,,51.8B,investing
+2025-10-07,02:45,2025-10-06T21:15:00+00:00,EUR,low,French Imports  (Aug),57.3B,,57.6B,investing
+2025-10-07,02:45,2025-10-06T21:15:00+00:00,EUR,low,French Reserve Assets Total  (Sep),"330,268.0M",,"304,802.0M",investing
+2025-10-07,02:45,2025-10-06T21:15:00+00:00,EUR,low,French Trade Balance  (Aug),-5.5B,-5.2B,-5.7B,investing
+2025-10-07,03:00,2025-10-06T21:30:00+00:00,CHF,low,Foreign Reserves (USD)  (Sep),726.7B,,715.2B,investing
+2025-10-07,04:30,2025-10-06T23:00:00+00:00,GBP,low,Mortgage Rate (GBP)  (Sep),6.78%,,6.86%,investing
+2025-10-07,04:40,2025-10-06T23:10:00+00:00,EUR,low,Spanish 12-Month Letras Auction,2.006%,,1.986%,investing
+2025-10-07,04:40,2025-10-06T23:10:00+00:00,EUR,low,Spanish 6-Month Letras Auction,1.937%,,1.958%,investing
+2025-10-07,05:00,2025-10-06T23:30:00+00:00,SGD,low,Foreign Reserves USD (MoM)  (Sep),393.1B,,391.3B,investing
+2025-10-07,05:30,2025-10-07T00:00:00+00:00,EUR,low,German 5-Year Bobl Auction,,,2.290%,investing
+2025-10-07,06:00,2025-10-07T00:30:00+00:00,CAD,low,Leading Index (MoM)  (Sep),,,0.14%,investing
+2025-10-07,07:00,2025-10-07T01:30:00+00:00,BRL,low,IGP-DI Inflation Index (MoM)  (Sep),,,0.20%,investing
+2025-10-07,08:30,2025-10-07T03:00:00+00:00,USD,low,Exports  (Aug),,,280.50B,investing
+2025-10-07,08:30,2025-10-07T03:00:00+00:00,USD,low,Imports  (Aug),,,358.80B,investing
+2025-10-07,08:30,2025-10-07T03:00:00+00:00,USD,low,Trade Balance  (Aug),,-61.40B,-78.30B,investing
+2025-10-07,08:30,2025-10-07T03:00:00+00:00,CAD,low,Exports  (Aug),,,61.86B,investing
+2025-10-07,08:30,2025-10-07T03:00:00+00:00,CAD,low,Imports  (Aug),,,66.80B,investing
+2025-10-07,08:30,2025-10-07T03:00:00+00:00,CAD,low,Trade Balance  (Aug),,-5.70B,-4.94B,investing
+2025-10-07,08:55,2025-10-07T03:25:00+00:00,USD,low,Redbook (YoY),,,5.9%,investing
+2025-10-07,09:00,2025-10-07T03:30:00+00:00,BRL,low,Auto Production (MoM)  (Sep),,,3.0%,investing
+2025-10-07,09:00,2025-10-07T03:30:00+00:00,BRL,low,Auto Sales (MoM)  (Sep),,,-7.3%,investing
+2025-10-07,10:00,2025-10-07T04:30:00+00:00,USD,low,FOMC Member Bostic Speaks,,,,investing
+2025-10-07,10:00,2025-10-07T04:30:00+00:00,CAD,low,Ivey PMI n.s.a  (Sep),,,50.0,investing
+2025-10-07,10:00,2025-10-07T04:30:00+00:00,CAD,low,Ivey PMI  (Sep),,51.2,50.1,investing
+2025-10-07,10:05,2025-10-07T04:35:00+00:00,USD,low,FOMC Member Bowman Speaks,,,,investing
+2025-10-07,10:10,2025-10-07T04:40:00+00:00,USD,low,IBD/TIPP Economic Optimism  (Oct),,49.3,48.7,investing
+2025-10-07,11:00,2025-10-07T05:30:00+00:00,USD,low,CB Employment Trends Index  (Sep),,,106.41,investing
+2025-10-07,11:00,2025-10-07T05:30:00+00:00,USD,low,NY Fed 1-Year Consumer Inflation Expectations  (Sep),,,3.2%,investing
+2025-10-07,11:00,2025-10-07T05:30:00+00:00,NZD,low,GlobalDairyTrade Price Index,,,-0.8%,investing
+2025-10-07,11:00,2025-10-07T05:30:00+00:00,USD,low,Milk Auctions,,,"4,041.0",investing
+2025-10-07,11:30,2025-10-07T06:00:00+00:00,USD,low,FOMC Member Kashkari Speaks,,,,investing
+2025-10-07,12:00,2025-10-07T06:30:00+00:00,USD,low,EIA Short-Term Energy Outlook,,,,investing
+2025-10-07,12:00,2025-10-07T06:30:00+00:00,EUR,low,German Buba President Nagel Speaks,,,,investing
+2025-10-07,12:00,2025-10-07T06:30:00+00:00,RUB,low,Budget Balance % of GDP  (Sep),,,-1.90%,investing
+2025-10-07,12:10,2025-10-07T06:40:00+00:00,EUR,low,ECB President Lagarde Speaks,,,,investing
+2025-10-07,13:00,2025-10-07T07:30:00+00:00,USD,low,3-Year Note Auction,,,3.485%,investing
+2025-10-07,13:00,2025-10-07T07:30:00+00:00,USD,low,Atlanta Fed GDPNow  (Q3),,3.8%,3.8%,investing
+2025-10-07,15:00,2025-10-07T09:30:00+00:00,USD,low,Consumer Credit  (Aug),,12.90B,16.01B,investing
+2025-10-07,16:30,2025-10-07T11:00:00+00:00,USD,low,API Weekly Crude Oil Stock,,,-3.674M,investing
+2025-10-07,19:30,2025-10-07T14:00:00+00:00,JPY,low,Overall wage income of employees  (Aug),,2.6%,4.1%,investing
+2025-10-07,19:30,2025-10-07T14:00:00+00:00,JPY,low,Overtime Pay (YoY)  (Aug),,,3.30%,investing
+2025-10-07,19:50,2025-10-07T14:20:00+00:00,JPY,low,Adjusted Current Account  (Aug),,2.45T,1.88T,investing
+2025-10-07,19:50,2025-10-07T14:20:00+00:00,JPY,low,Bank Lending (YoY)  (Sep),,3.7%,3.6%,investing
+2025-10-07,19:50,2025-10-07T14:20:00+00:00,JPY,low,Current Account n.s.a.  (Aug),,3.540T,2.684T,investing
+2025-10-07,20:30,2025-10-07T15:00:00+00:00,AUD,low,Building Approvals (MoM)  (Aug),,-6.0%,-8.2%,investing
+2025-10-07,20:30,2025-10-07T15:00:00+00:00,AUD,low,NAB Business Confidence  (Sep),,,4,investing
+2025-10-07,20:30,2025-10-07T15:00:00+00:00,AUD,low,Private House Approvals  (Aug),,-2.6%,1.1%,investing
+2025-10-07,21:00,2025-10-07T15:30:00+00:00,NZD,low,RBNZ Interest Rate Decision,,2.75%,3.00%,investing
+2025-10-07,21:00,2025-10-07T15:30:00+00:00,NZD,low,RBNZ Rate Statement,,,,investing

@@ -1,1 +1,14 @@
-data/
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Environment
+.env
+
+# Mac/Windows system files
+.DS_Store
+Thumbs.db

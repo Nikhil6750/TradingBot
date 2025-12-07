@@ -19,7 +19,7 @@ set PYTHON_EXE=%APPDIR%\venv\Scripts\python.exe
 set NGROK_EXE=C:\Users\nikhi\Downloads\ngrok-v3-stable-windows-amd64\ngrok.exe
 
 :: Start uvicorn (server) in new window
-start "Samantha API" cmd /c "cd /d %APPDIR% && %PYTHON_EXE% -m uvicorn server:app --host 0.0.0.0 --port 8000"
+start "Samantha API" cmd /c "cd /d %APPDIR%\backend && %PYTHON_EXE% -m uvicorn server:app --host 0.0.0.0 --port 8000"
 
 :: Wait a few seconds so server is up
 timeout /t 5 >nul
