@@ -1,0 +1,36 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: tradingbot-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app:delegated
+      # Mount data folder if needed, relative to root
+      - ./data:/data:delegated
+      - ./.env:/app/.env:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - trading-net
+
+  frontend:
+    build:
+      context: ./trading-ui
+      dockerfile: Dockerfile
+    container_name: tradingbot-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./trading-ui:/app:delegated
+      - /app/node_modules
+    networks:
+      - trading-net
+    depends_on:
+      - backend
+
+networks:
+  trading-net:
+    driver: bridge

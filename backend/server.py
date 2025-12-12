@@ -2,6 +2,9 @@ from __future__ import annotations
 import io, os, glob, base64
 from typing import Optional, List, Dict
 from dataclasses import dataclass
+import uuid
+# import pandas_ta as ta # Ensure pandas-ta is available or handle errs
+from pine_converter import PineConverter
 
 # near your other imports
 from agent.tools import router as tools_router
@@ -44,13 +47,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-# In-memory store for uploaded CSVs (MVP CSV window chart)
 CSV_STORE: Dict[str, pd.DataFrame] = {}
 CSV_TZ: Dict[str, str] = {}
 CSV_MAX_BYTES = int(float(os.getenv("CSV_MAX_BYTES", str(25 * 1024 * 1024))))  # 25MB default
+
+# Strategy Memory (Session based)
+STRATEGY_STORE: Dict[str, str] = {} # key -> python_code
 
 def _canon_cols(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize required columns to: timestamp, open, high, low, close, volume, symbol (optional)."""
@@ -138,11 +140,15 @@ async def upload_csv(
     except Exception:
         raise HTTPException(400, "Invalid 'timestamp' values; ensure ISO-like strings")
 
-    df["time_utc"] = ts_utc
-    keep = df[["time_utc", "open", "high", "low", "close", "volume"]].notnull().all(axis=1)
+    df["time"] = ts_utc
+    keep = df[["time", "open", "high", "low", "close", "volume"]].notnull().all(axis=1)
     df = df[keep].copy()
     if df.empty:
         raise HTTPException(400, "CSV has no valid rows after parsing")
+
+    # Sort and add tidx to match _ensure_ohlc schema (required for backtest)
+    df = df.sort_values("time").reset_index(drop=True)
+    df["tidx"] = np.arange(len(df), dtype=int)
 
     loaded: List[str] = []
     if "symbol" in df.columns and df["symbol"].notnull().any():
@@ -150,7 +156,7 @@ async def upload_csv(
             symu = str(sym).upper().strip()
             if not symu:
                 continue
-            gg = g[["time_utc", "open", "high", "low", "close", "volume"]].sort_values("time_utc").reset_index(drop=True)
+            gg = g[["time", "open", "high", "low", "close", "volume", "tidx"]].sort_values("time").reset_index(drop=True)
             CSV_STORE[symu] = gg
             CSV_TZ[symu] = tz_name
             loaded.append(symu)
@@ -158,7 +164,7 @@ async def upload_csv(
         if not symbol:
             raise HTTPException(400, "CSV missing 'symbol' column; pass ?symbol=SYMBOL")
         symu = symbol.upper().strip()
-        gg = df[["time_utc", "open", "high", "low", "close", "volume"]].sort_values("time_utc").reset_index(drop=True)
+        gg = df[["time", "open", "high", "low", "close", "volume", "tidx"]].sort_values("time").reset_index(drop=True)
         CSV_STORE[symu] = gg
         CSV_TZ[symu] = tz_name
         loaded.append(symu)
@@ -174,17 +180,18 @@ def chart_data(
     limit: int = Query(default=5000, ge=1, le=200000),
 ):
     symu = (symbol or "").upper().strip()
-    if symu not in CSV_STORE:
+    df = _get_dataframe(symu)
+    if df is None:
         raise HTTPException(404, f"No data for symbol '{symu}'. Upload first.")
     h0, m0 = _parse_hhmm(start_time)
     h1, m1 = _parse_hhmm(end_time)
     if (h0, m0) > (h1, m1):
         raise HTTPException(400, "start_time must be <= end_time")
 
-    df = CSV_STORE[symu]
+
     tz_name = CSV_TZ.get(symu, "UTC")
     zone = tz.gettz(tz_name)
-    tloc = df["time_utc"].dt.tz_convert(zone)
+    tloc = df["time"].dt.tz_convert(zone)
 
     mask = (tloc.dt.hour > h0) | ((tloc.dt.hour == h0) & (tloc.dt.minute >= m0))
     mask &= (tloc.dt.hour < h1) | ((tloc.dt.hour == h1) & (tloc.dt.minute <= m1))
@@ -200,10 +207,10 @@ def chart_data(
     if sel.empty:
         return {"symbol": symu, "count": 0, "rows": []}
 
-    sel = sel.sort_values("time_utc").head(int(limit))
+    sel = sel.sort_values("time").head(int(limit))
     rows = [
         {
-            "time": r.time_utc.isoformat(),
+            "time": r.time.isoformat(),
             "open": float(r.open),
             "high": float(r.high),
             "low": float(r.low),
@@ -218,19 +225,19 @@ def chart_data(
 @app.get("/csv/store-debug")
 def csv_store_debug(symbol: str):
     symu = (symbol or "").upper().strip()
-    if symu not in CSV_STORE:
+    df = _get_dataframe(symu)
+    if df is None:
         raise HTTPException(404, f"No data for symbol '{symu}'. Upload first.")
-    df = CSV_STORE[symu]
     if df.empty:
         return {"symbol": symu, "rows_total": 0}
     to_s = lambda x: pd.to_datetime(x).tz_convert("UTC").strftime("%Y-%m-%d %H:%M:%S %Z")
     return {
         "symbol": symu,
         "rows_total": int(df.shape[0]),
-        "start_utc": to_s(df.iloc[0]["time_utc"]),
-        "end_utc": to_s(df.iloc[-1]["time_utc"]),
-        "first_3": [r.time_utc.isoformat() for r in df.head(3).itertuples(index=False)],
-        "last_3": [r.time_utc.isoformat() for r in df.tail(3).itertuples(index=False)],
+        "start_utc": to_s(df.iloc[0]["time"]),
+        "end_utc": to_s(df.iloc[-1]["time"]),
+        "first_3": [r.time.isoformat() for r in df.head(3).itertuples(index=False)],
+        "last_3": [r.time.isoformat() for r in df.tail(3).itertuples(index=False)],
     }
 
 
@@ -239,13 +246,9 @@ def csv_store_debug(symbol: str):
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/chart/window")
 def chart_window(symbol: str, center_tidx: int, bars: int = 60, tz: str = "UTC"):
-    path = _find_csv(symbol)
-    if not path:
+    df = _get_dataframe(symbol)
+    if df is None:
         raise HTTPException(404, f"No CSV found for {symbol}")
-    try:
-        df = _ensure_ohlc(pd.read_csv(path))
-    except Exception as e:
-        raise HTTPException(500, str(e))
 
     bars = max(10, int(bars))
     center = int(center_tidx)
@@ -300,6 +303,20 @@ def _find_csv(symbol: str) -> Optional[str]:
         if m:
             m.sort(key=lambda p: os.path.getsize(p), reverse=True)
             return m[0]
+    return None
+
+def _get_dataframe(symbol: str) -> Optional[pd.DataFrame]:
+    symu = (symbol or "").upper().strip()
+    # 1. Check in-memory first
+    if symu in CSV_STORE:
+        return CSV_STORE[symu]
+    # 2. Check disk
+    path = _find_csv(symu)
+    if path:
+        try:
+            return _ensure_ohlc(pd.read_csv(path))
+        except Exception:
+            return None
     return None
 
 def _coerce_time_any(s: pd.Series) -> pd.Series:
@@ -522,14 +539,10 @@ def paper_place(payload: dict):
 @app.post("/backtest/run")
 def backtest_run(req: BacktestRunReq):
     sym = req.symbol.upper().strip()
-    path = _find_csv(sym)
-    if not path:
-        return JSONResponse({"ok": False, "error": f"No CSV found for {sym}"}, status_code=404)
-
-    try:
-        df_full = _ensure_ohlc(pd.read_csv(path))
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    sym = req.symbol.upper().strip()
+    df_full = _get_dataframe(sym)
+    if df_full is None:
+         return JSONResponse({"ok": False, "error": f"No CSV found for {sym}"}, status_code=404)
 
     df_full.attrs["symbol"] = sym
 
@@ -630,13 +643,9 @@ def backtest_plot(
     bars: int = Query(40),
     reason: Optional[str] = Query(None),
 ):
-    path = _find_csv(symbol)
-    if not path:
+    df = _get_dataframe(symbol)
+    if df is None:
         return StreamingResponse(io.BytesIO(_png_error_bytes(f"No CSV for {symbol}")), media_type="image/png")
-    try:
-        df = _ensure_ohlc(pd.read_csv(path))
-    except Exception as e:
-        return StreamingResponse(io.BytesIO(_png_error_bytes(str(e))), media_type="image/png")
 
     if tidx is not None:
         center_pos = int(np.clip(int(tidx), 0, len(df)-1))
@@ -658,13 +667,9 @@ class VerifyReq(BaseModel):
 
 @app.post("/backtest/verify")
 def backtest_verify(req: VerifyReq):
-    path = _find_csv(req.symbol)
-    if not path:
-        return JSONResponse({"ok": False, "error": f"No CSV found for {req.symbol}"}, status_code=404)
-    try:
-        df = _ensure_ohlc(pd.read_csv(path))
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    df = _get_dataframe(req.symbol)
+    if df is None:
+         return JSONResponse({"ok": False, "error": f"No CSV found for {req.symbol}"}, status_code=404)
 
     out = []
     for it in req.items:
@@ -721,23 +726,19 @@ def backtest_verify(req: VerifyReq):
 @app.get("/symbols")
 def list_symbols():
     if not os.path.isdir(DATA_DIR):
-        return {"symbols": []}
-    syms: List[str] = []
+        return {"symbols": sorted(list(CSV_STORE.keys()))}
+    syms = set(CSV_STORE.keys())
     for f in sorted(os.listdir(DATA_DIR)):
         if f.lower().endswith(".csv"):
             s = f.replace("FX_", "").split(",")[0].strip()
-            if s and s not in syms: syms.append(s)
-    return {"symbols": syms}
+            if s: syms.add(s)
+    return {"symbols": sorted(list(syms))}
 
 @app.get("/csv/debug")
 def csv_debug(symbol: str, n: int = 5):
-    path = _find_csv(symbol)
-    if not path:
+    df = _get_dataframe(symbol)
+    if df is None:
         return {"ok": False, "error": f"No CSV found for {symbol}"}
-    try:
-        df = _ensure_ohlc(pd.read_csv(path))
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
     to_s = lambda x: pd.to_datetime(x).tz_convert("UTC").strftime("%Y-%m-%d %H:%M:%S UTC")
     return {
         "ok": True,
@@ -888,3 +889,156 @@ def calendar_summary(
     out = filter_events(df, [c.strip() for c in currencies.split(",") if c.strip()],
                         min_impact=min_impact, lookahead_hours=lookahead_hrs, local_tz=tz)
     return {"date": date_str, "summary": make_telegram_summary(out, tz)}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Strategy Builder Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class PineConvertReq:
+    code: str
+
+@app.post("/convert_pine")
+def convert_pine(req: PineConvertReq):
+    try:
+        converter = PineConverter()
+        py_code = converter.convert(req.code)
+        
+        # Validation: Check for syntax errors by compiling
+        try:
+            compile(py_code, "<string>", "exec")
+        except SyntaxError as e:
+            return {"ok": False, "error": f"Conversion produced invalid Python: {e.msg} at line {e.lineno}"}
+        except Exception as e:
+            return {"ok": False, "error": f"Validation Error: {str(e)}"}
+
+        # Store
+        key = str(uuid.uuid4())
+        STRATEGY_STORE[key] = py_code
+        
+        return {"ok": True, "python_code": py_code, "key": key}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+class StrategyRunReq(BaseModel):
+    key: str
+    symbol: str
+    hour_allow: str = "0-24"
+    date: Optional[str] = None
+    tp_pips: float = 10.0
+    sl_pips: float = 10.0
+    max_hold_bars: int = 12
+    max_alerts: int = 50
+    cooldown_bars: int = 1
+    fill: str = "next_open"
+    bars_plot: int = 40
+    tz: str = "UTC"
+
+@app.post("/run_strategy")
+def run_strategy(req: StrategyRunReq):
+    # 1. Retrieve Strategy
+    if req.key not in STRATEGY_STORE:
+         return JSONResponse({"ok": False, "error": "Strategy session expired or invalid"}, status_code=404)
+    py_code = STRATEGY_STORE[req.key]
+    
+    # 2. Retrieve Data
+    sym = req.symbol.upper().strip()
+    df_full = _get_dataframe(sym)
+    if df_full is None:
+         return JSONResponse({"ok": False, "error": f"No CSV found for {sym}"}, status_code=404)
+    
+    # 3. Filter Data
+    df_filt = df_full.copy()
+    if req.date:
+        d = pd.to_datetime(req.date).date()
+        df_filt = df_filt[df_filt["time"].dt.date == d]
+        if df_filt.empty:
+             return {"ok": True, "summary": {"trades":0,"wins":0,"win_rate":0}, "alerts": []}
+    
+    h0, h1 = _parse_hour_allow(req.hour_allow)
+    df_filt = df_filt[(df_filt["time"].dt.hour >= h0) & (df_filt["time"].dt.hour < h1)]
+    if df_filt.empty:
+         return {"ok": True, "summary": {"trades":0,"wins":0,"win_rate":0}, "alerts": []}
+         
+    df_filt = df_filt.reset_index(drop=True)
+    
+    # 4. Compile and Execute Strategy
+    # We create a local scope to execute the user's strategy function
+    local_scope = {}
+    try:
+        exec(py_code, {"pd": pd, "np": np}, local_scope)
+        strategy_func = local_scope.get("strategy")
+        if not strategy_func:
+            return JSONResponse({"ok": False, "error": "No 'strategy' function found in generated code"}, status_code=500)
+            
+        # Run strategy
+        valid_cols = set(df_filt.columns)
+        # Ensure minimal columns exist
+        df_w_sigs = strategy_func(df_filt.copy())
+        
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Runtime Error: {e}"}, status_code=400)
+
+    # 5. Evaluate Signals
+    params = OutcomeParams(req.tp_pips, req.sl_pips, req.max_hold_bars, req.fill)
+    alerts = []
+    last_signal_i = -10**9
+    
+    # Iterate
+    for i in range(1, len(df_w_sigs)):
+        row = df_w_sigs.iloc[i]
+        
+        # Check Entry
+        side = None
+        if row.get("long_entry") == True: side = "LONG"
+        elif row.get("short_entry") == True: side = "SHORT"
+        
+        if not side: continue
+        
+        # Cooldown
+        if i - last_signal_i < req.cooldown_bars: continue
+        last_signal_i = i
+        
+        # Evaluate
+        t_utc = row["time"]
+        tidx = int(row["tidx"]) if "tidx" in row else 0 
+        
+        entry_pos = min(tidx + 1, len(df_full)-1)
+        entry_px = float(df_full.iloc[entry_pos]["open"]) if params.fill=="next_open" else float(row["close"])
+        
+        outc = evaluate_trade_pos(df_full, entry_pos, side, entry_px, params)
+        
+        # Render chart
+        png_bytes = render_candles_png(df_full, center_pos=tidx, bars=req.bars_plot, tz=req.tz, symbol=req.symbol, reason=f"Strategy {side}")
+        b64 = base64.b64encode(png_bytes).decode("ascii")
+        qt = quote(t_utc.isoformat())
+        
+        alerts.append({
+            "time": t_utc.isoformat(),
+            "tidx": tidx,
+            "side": side,
+            "reason": "Strategy Signal",
+            "entry_price": entry_px,
+            "exit_price": outc["exit_price"],
+            "exit_time": outc["exit_time"].isoformat(),
+            "outcome": outc["outcome"],
+            "r_multiple": outc["r_multiple"],
+            "take": (outc["outcome"] == "win"),
+            "plot_data_url": f"data:image/png;base64,{b64}",
+             "plot_url": f"/backtest/plot?symbol={req.symbol}&tidx={tidx}&time={qt}&tz={req.tz}&bars={req.bars_plot}&reason={side}"
+        })
+        if len(alerts) >= req.max_alerts: break
+
+    trades = len(alerts)
+    wins = sum(a["outcome"] == "win" for a in alerts)
+    losses = sum(a["outcome"] == "loss" for a in alerts)
+    timeouts = sum(a["outcome"] == "timeout" for a in alerts)
+    win_rate = round(100 * wins / max(trades,1), 2)
+
+    return {
+        "ok": True,
+        "symbol": req.symbol,
+        "summary": {"trades": trades, "wins": wins, "losses": losses, "timeouts": timeouts, "win_rate": win_rate},
+        "run": {"date_utc": req.date, "hour_allow": req.hour_allow},
+        "alerts": alerts,
+    }

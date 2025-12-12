@@ -27,14 +27,25 @@ export default function Backtest() {
 
   const [verifyMap, setVerifyMap] = useState({});
   const [verifying, setVerifying] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const fetchSymbols = async (selectSymbol = null) => {
+    try {
+      const r = await fetch(`${BASE_URL}/symbols`);
+      const d = await r.json();
+      const list = d.symbols || [];
+      setSymbols(list);
+      if (selectSymbol && list.includes(selectSymbol)) {
+        setSymbol(selectSymbol);
+      }
+    } catch { }
+  };
 
   useEffect(() => {
     let abort = false;
     (async () => {
       try {
-        const r = await fetch(`${BASE_URL}/symbols`);
-        const d = await r.json();
-        if (!abort) setSymbols(d.symbols || []);
+        await fetchSymbols();
       } catch {
         if (!abort) setSymbols([]);
       }
@@ -122,9 +133,47 @@ export default function Backtest() {
         });
         setVerifyMap(map);
       }
-    } catch {}
+    } catch { }
     finally {
       setVerifying(false);
+    }
+  }
+
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setLoading(true);
+    setErr("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("tz", "UTC");
+
+      // Infer symbol from filename (e.g., "MyData.csv" -> "MYDATA")
+      const symName = file.name.replace(/\.[^/.]+$/, "").toUpperCase().trim();
+
+      const r = await fetch(`${BASE_URL}/upload-csv?symbol=${encodeURIComponent(symName)}`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(`${r.status} ${txt}`);
+      }
+      const d = await r.json();
+      if (d.status === "ok") {
+        // Refresh symbols and select the new one (if returned)
+        const loadedSym = d.symbols_loaded?.[0];
+        await fetchSymbols(loadedSym);
+      }
+    } catch (ex) {
+      setErr(String(ex.message || ex));
+    } finally {
+      setLoading(false);
+      // Reset input so same file can be selected again if needed
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -152,24 +201,46 @@ export default function Backtest() {
         )}
 
         <label style={{ color: "#9ca3af", fontSize: 12 }}>Symbol</label>
-        <select
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value)}
-          style={{
-            width: "100%",
-            margin: "6px 0 12px",
-            padding: 8,
-            background: "#111827",
-            color: "#e5e7eb",
-            border: "1px solid #374151",
-            borderRadius: 6,
-          }}
-        >
-          <option value="">-- Select Symbol --</option>
-          {symbols.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
+        <div style={{ display: "flex", gap: 10, marginTop: 6, marginBottom: 12 }}>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              padding: "8px 12px",
+              background: "#374151",
+              color: "#e5e7eb",
+              border: "1px solid #4b5563",
+              borderRadius: 6,
+              cursor: "pointer",
+              fontSize: 12,
+              whiteSpace: "nowrap",
+            }}
+          >
+            Upload CSV
+          </button>
+          <input
+            type="text"
+            readOnly
+            value={symbol || "No symbol selected"}
+            placeholder="No symbol selected"
+            style={{
+              width: "100%",
+              padding: 8,
+              background: "#111827",
+              color: symbol ? "#e5e7eb" : "#6b7280",
+              border: "1px solid #374151",
+              borderRadius: 6,
+              fontSize: 14,
+            }}
+          />
+          <input
+            type="file"
+            accept=".csv"
+            ref={fileInputRef}
+            style={{ display: "none" }}
+            onChange={handleUpload}
+          />
+        </div>
 
         <label style={{ color: "#9ca3af", fontSize: 12 }}>Date (UTC)</label>
         <input
