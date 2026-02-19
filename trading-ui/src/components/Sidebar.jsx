@@ -3,10 +3,7 @@ import { NavLink } from "react-router-dom";
 
 export default function Sidebar() {
   const links = [
-    // { name: "Chat", path: "/chat" },
-    { name: "Backtest", path: "/backtest" },
-    { name: "Strategy Builder", path: "/strategy-builder" },
-    // { name: "News", path: "/news" },
+    { name: "Strategy Builder", path: "/" },
   ];
 
   return (

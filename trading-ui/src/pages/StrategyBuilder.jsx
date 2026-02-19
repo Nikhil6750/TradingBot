@@ -1,261 +1,283 @@
-import React, { useEffect, useRef, useState } from "react";
+import axios from "axios";
+import { useMemo, useState } from "react";
 import { BASE_URL } from "../lib/api";
+import ForexChart from "../components/ForexChart";
+import SetupDetailChart from "../components/SetupDetailChart";
 
-const card = {
-    background: "#0b1220",
-    border: "1px solid #1f2937",
-    borderRadius: 10,
-    padding: 12,
-    height: "100%",
-    display: "flex",
-    flexDirection: "column",
-};
+function formatTime(sec) {
+  const v = Number(sec);
+  if (!Number.isFinite(v)) return "-";
+  return new Date(v * 1000).toISOString().replace("T", " ").replace(".000Z", "Z");
+}
 
-const inputStyle = {
-    width: "100%",
-    padding: 8,
-    background: "#111827",
-    color: "#e5e7eb",
-    border: "1px solid #374151",
-    borderRadius: 6,
-    fontFamily: "monospace",
-    fontSize: 12,
-};
+function extractBackendError(err) {
+  if (axios.isAxiosError(err)) {
+    const status = err.response?.status;
+    const data = err.response?.data;
+    if (typeof data === "string" && data.trim()) return data;
+    if (data?.detail) return String(data.detail);
+    if (data?.error) return String(data.error);
+    if (status) return `HTTP ${status}`;
+    return err.message || "Request failed";
+  }
+  return String(err?.message || err || "Unknown error");
+}
+
+function inferMarketPairFromFilename(filename) {
+  const name = String(filename || "");
+  if (!name) return { market: "", pair: "", error: "" };
+
+  // Strict filename formats:
+  // - FX_<PAIR>.csv or FX_<PAIR>_<ANY>.csv
+  // - BINANCE_<PAIR>.csv or BINANCE_<PAIR>_<ANY>.csv
+  if (name.slice(-4).toLowerCase() !== ".csv") {
+    return { market: "", pair: "", error: "Invalid CSV filename format" };
+  }
+
+  const stem = name.slice(0, -4);
+  if (stem.startsWith("FX_")) {
+    const rest = stem.slice("FX_".length);
+    const pair = rest.split("_", 1)[0] || "";
+    if (!pair) return { market: "", pair: "", error: "Invalid CSV filename format" };
+    return { market: "forex", pair, error: "" };
+  }
+
+  if (stem.startsWith("BINANCE_")) {
+    const rest = stem.slice("BINANCE_".length);
+    const pair = rest.split("_", 1)[0] || "";
+    if (!pair) return { market: "", pair: "", error: "Invalid CSV filename format" };
+    return { market: "crypto", pair, error: "" };
+  }
+
+  return { market: "", pair: "", error: "Invalid CSV filename format" };
+}
 
 export default function StrategyBuilder() {
-    // Pine / Python
-    const [pineCode, setPineCode] = useState("");
-    // const [pythonCode, setPythonCode] = useState("# Python code will appear here..."); // Hidden
-    const [strategyKey, setStrategyKey] = useState(null);
-    const [compileSuccess, setCompileSuccess] = useState(false);
+  const [csvFile, setCsvFile] = useState(null);
 
-    // Data / Execution
-    const [symbol, setSymbol] = useState("");
-    const [symbols, setSymbols] = useState([]);
-    const [date, setDate] = useState("");
-    const [hourFrom, setHourFrom] = useState("6");
-    const [hourTo, setHourTo] = useState("10");
+  const [candles, setCandles] = useState([]);
+  const [setups, setSetups] = useState([]);
+  const [trades, setTrades] = useState([]);
+  const [selectedSetup, setSelectedSetup] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-    const [loading, setLoading] = useState(false);
-    const [converting, setConverting] = useState(false);
-    const [err, setErr] = useState("");
+  const inferred = useMemo(() => inferMarketPairFromFilename(csvFile?.name), [csvFile]);
 
-    const [alerts, setAlerts] = useState([]);
-    const [summary, setSummary] = useState(null);
-    const [runMeta, setRunMeta] = useState(null);
+  const canRun = Boolean(csvFile) && !loading;
 
-    const fileInputRef = useRef(null);
+  const onRun = async () => {
+    setError("");
+    setLoading(true);
+    setCandles([]);
+    setSetups([]);
+    setTrades([]);
+    setSelectedSetup(null);
+    try {
+      const form = new FormData();
+      form.append("file", csvFile);
 
-    // Load symbols on mount
-    useEffect(() => {
-        fetchSymbols();
-    }, []);
+      const res = await axios.post(`${BASE_URL}/run-backtest`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      const data = res?.data || {};
+      setCandles(Array.isArray(data.candles) ? data.candles : []);
+      setSetups(Array.isArray(data.setups) ? data.setups : []);
+      setTrades(Array.isArray(data.trades) ? data.trades : []);
+    } catch (err) {
+      setError(extractBackendError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    const fetchSymbols = async (selectSymbol = null) => {
-        try {
-            const r = await fetch(`${BASE_URL}/symbols`);
-            const d = await r.json();
-            const list = d.symbols || [];
-            setSymbols(list);
-            if (selectSymbol && list.includes(selectSymbol)) {
-                setSymbol(selectSymbol);
-            }
-        } catch { }
-    };
+  const sortedSetups = useMemo(() => {
+    const list = Array.isArray(setups) ? setups : [];
+    return [...list].sort((a, b) => Number(a?.time) - Number(b?.time));
+  }, [setups]);
 
-    const handleUpload = async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        setLoading(true); setErr("");
-        try {
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("tz", "UTC");
-            const symName = file.name.replace(/\.[^/.]+$/, "").toUpperCase().trim();
+  const selectedTrade = useMemo(() => {
+    const st = Number(selectedSetup?.time);
+    if (!Number.isFinite(st)) return null;
+    return (Array.isArray(trades) ? trades : []).find((t) => Number(t?.breaking_candle_time) === st) || null;
+  }, [selectedSetup, trades]);
 
-            const r = await fetch(`${BASE_URL}/upload-csv?symbol=${encodeURIComponent(symName)}`, { method: "POST", body: formData });
-            if (!r.ok) throw new Error(await r.text());
-            const d = await r.json();
-            if (d.status === "ok") await fetchSymbols(symName || d.symbols_loaded?.[0]);
-        } catch (ex) { setErr(String(ex.message || ex)); }
-        finally { setLoading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
-    };
-
-    const convertStrategy = async () => {
-        setConverting(true); setErr(""); setCompileSuccess(false);
-        try {
-            const r = await fetch(`${BASE_URL}/convert_pine`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ code: pineCode }),
-            });
-            const d = await r.json();
-            if (!d.ok) throw new Error(d.error);
-            // setPythonCode(d.python_code); // Internal only
-            setStrategyKey(d.key);
-            setCompileSuccess(true);
-        } catch (ex) {
-            setErr("Compilation Error: " + (ex.message || ex));
-        } finally {
-            setConverting(false);
-        }
-    };
-
-    const runStrategy = async (e) => {
-        e?.preventDefault?.();
-        if (!strategyKey) { setErr("Please compile your strategy first."); return; }
-        if (!symbol) { setErr("Please upload/select a CSV."); return; }
-
-        setLoading(true); setErr(""); setAlerts([]); setSummary(null);
-        try {
-            const body = {
-                key: strategyKey,
-                symbol: symbol,
-                hour_allow: `${hourFrom}-${hourTo}`,
-                ...(date ? { date } : {}),
-            };
-            const r = await fetch(`${BASE_URL}/run_strategy`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
-            });
-            const d = await r.json();
-            if (!d.ok) throw new Error(d.error);
-
-            setAlerts(d.alerts || []);
-            setSummary(d.summary || null);
-            setRunMeta(d.run || null);
-        } catch (ex) {
-            setErr("Runtime Error: " + (ex.message || ex));
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div style={{ padding: 16, height: "100vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
-            <h2 style={{ color: "#e5e7eb", margin: 0 }}>Strategy Builder (Pine Script)</h2>
-
-            {/* Editor & Config Area */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, height: "500px" }}>
-
-                {/* Pine Editor */}
-                <div style={card}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                        <h3 style={{ color: "#9ca3af", fontSize: 14, margin: 0 }}>Pine Script</h3>
-                        <button onClick={convertStrategy} disabled={converting || !pineCode.trim()} style={{ background: "#f59e0b", border: "none", borderRadius: 4, padding: "6px 16px", cursor: "pointer", fontSize: 12, opacity: (converting || !pineCode.trim()) ? 0.7 : 1, fontWeight: "600", color: "#111827" }}>
-                            {converting ? "Compiling..." : "Compile"}
-                        </button>
-                    </div>
-                    <textarea
-                        value={pineCode}
-                        onChange={(e) => { setPineCode(e.target.value); setCompileSuccess(false); }}
-                        placeholder="Paste your Pinescript"
-                        style={{ flex: 1, ...inputStyle, resize: "none", fontSize: 14, lineHeight: "1.5" }}
-                        spellCheck={false}
-                    />
-                    {compileSuccess && (
-                        <div style={{ marginTop: 8, color: "#4ade80", fontSize: 13, background: "rgba(74, 222, 128, 0.1)", padding: "6px 10px", borderRadius: 4, display: "flex", alignItems: "center", gap: 6 }}>
-                            <span>✓</span> Pinescript successfully compiled
-                        </div>
-                    )}
-                </div>
-
-                {/* Removed Python Preview */}
-
-                {/* Config & Run */}
-                <div style={card}>
-                    <h3 style={{ color: "#e5e7eb", margin: "0 0 12px", fontSize: 16 }}>Run Settings</h3>
-
-                    <label style={{ color: "#9ca3af", fontSize: 12 }}>Symbol</label>
-                    <div style={{ display: "flex", gap: 8, marginTop: 4, marginBottom: 12 }}>
-                        <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            style={{ padding: "6px 10px", background: "#374151", color: "#e5e7eb", border: "1px solid #4b5563", borderRadius: 4, cursor: "pointer", fontSize: 11, whiteSpace: "nowrap" }}
-                        >
-                            Upload CSV
-                        </button>
-                        <input type="text" readOnly value={symbol || ""} placeholder="Select symbol" style={{ ...inputStyle, width: "100%" }} />
-                        <input type="file" accept=".csv" ref={fileInputRef} style={{ display: "none" }} onChange={handleUpload} />
-                    </div>
-
-                    <label style={{ color: "#9ca3af", fontSize: 12 }}>Date (UTC)</label>
-                    <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inputStyle, marginTop: 4, marginBottom: 12 }} />
-
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
-                        <div>
-                            <label style={{ color: "#9ca3af", fontSize: 12 }}>Hour From</label>
-                            <input type="number" value={hourFrom} onChange={e => setHourFrom(e.target.value)} style={{ ...inputStyle, marginTop: 4 }} />
-                        </div>
-                        <div>
-                            <label style={{ color: "#9ca3af", fontSize: 12 }}>Hour To</label>
-                            <input type="number" value={hourTo} onChange={e => setHourTo(e.target.value)} style={{ ...inputStyle, marginTop: 4 }} />
-                        </div>
-                    </div>
-
-                    <button
-                        onClick={runStrategy}
-                        disabled={loading || !strategyKey}
-                        style={{
-                            width: "100%", marginTop: "auto", padding: "12px",
-                            background: "#22c55e", color: "black", border: "none", borderRadius: 8,
-                            opacity: (loading || !strategyKey) ? 0.6 : 1,
-                            cursor: (loading || !strategyKey) ? "not-allowed" : "pointer",
-                            fontWeight: "bold"
-                        }}
-                    >
-                        {loading ? "Running..." : "Run Strategy"}
-                    </button>
-
-                    {err && <div style={{ color: "#ef4444", fontSize: 12, marginTop: 8 }}>{err}</div>}
-                </div>
-            </div>
-
-            {/* Results Section (Reusing style) */}
-            <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
-                {/* Summary */}
-                <div style={{ ...card, height: "auto" }}>
-                    <h3 style={{ color: "#e5e7eb", margin: "4px 0 6px" }}>Summary</h3>
-                    {!summary ? (
-                        <div style={{ color: "#9ca3af", fontSize: 12 }}>No run results yet.</div>
-                    ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8, color: "#e5e7eb" }}>
-                            <div>Trades: <b style={{ float: "right" }}>{summary.trades}</b></div>
-                            <div>Wins: <b style={{ float: "right" }}>{summary.wins}</b></div>
-                            <div>Losses: <b style={{ float: "right" }}>{summary.losses ?? 0}</b></div>
-                            <div>Win%: <b style={{ float: "right" }}>{summary.win_rate}</b></div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Alerts / Table */}
-                <div style={{ ...card, height: "auto" }}>
-                    <h3 style={{ color: "#e5e7eb", margin: "0 0 12px" }}>Trade Log</h3>
-                    {alerts.length === 0 ? (
-                        <div style={{ color: "#9ca3af", fontSize: 12 }}>No trades generated.</div>
-                    ) : (
-                        <div style={{ display: "grid", gap: 12 }}>
-                            {alerts.map((a, i) => (
-                                <div key={i} style={{ border: "1px solid #1f2937", borderRadius: 8, overflow: "hidden" }}>
-                                    <div style={{ padding: "8px 12px", background: "#0f172a", display: "flex", gap: 12, alignItems: "center", fontSize: 13 }}>
-                                        <span style={{ color: "#9ca3af" }}>{a.time}</span>
-                                        <span style={{ fontWeight: "bold", color: a.side === "LONG" ? "#22c55e" : "#f59e0b" }}>{a.side}</span>
-                                        <span style={{ marginLeft: "auto", color: a.take ? "#22c55e" : "#ef4444" }}>
-                                            {a.outcome?.toUpperCase()} ({a.r_multiple}R)
-                                        </span>
-                                    </div>
-                                    {a.plot_data_url && (
-                                        <div style={{ padding: 8 }}>
-                                            <img src={a.plot_data_url} alt="Chart" style={{ width: "100%", borderRadius: 4 }} />
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
+  return (
+    <div className="h-screen flex flex-col">
+      {/* Top bar */}
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-neutral-800 bg-neutral-950">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="text-lg font-semibold tracking-tight">AlgoTradeX</div>
+          <div className="hidden md:flex items-center gap-2 text-xs text-neutral-500">
+            <span className="px-2 py-1 rounded border border-neutral-800 bg-neutral-900">Timeframe: 5m</span>
+          </div>
         </div>
-    );
+
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <label className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-md px-3 py-2 text-sm text-neutral-300">
+            <span className="text-neutral-500">CSV</span>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              className="text-sm file:mr-3 file:rounded-md file:border-0 file:bg-neutral-800 file:px-3 file:py-1.5 file:text-neutral-200 file:hover:bg-neutral-700"
+              onChange={(e) => {
+                const f = e.target.files?.[0] || null;
+                setCsvFile(f);
+                setCandles([]);
+                setSetups([]);
+                setTrades([]);
+                setSelectedSetup(null);
+                setError("");
+              }}
+            />
+          </label>
+
+          <div className="px-3 py-2 text-sm text-neutral-400 border border-neutral-800 rounded-md bg-neutral-900">
+            {inferred.market ? `Market: ${inferred.market}` : "Market: -"}
+          </div>
+
+          <div className="px-3 py-2 text-sm text-neutral-400 border border-neutral-800 rounded-md bg-neutral-900">
+            {inferred.pair ? `Pair: ${inferred.pair}` : "Pair: -"}
+          </div>
+
+          <div className="px-3 py-2 text-sm text-neutral-400 border border-neutral-800 rounded-md bg-neutral-900">
+            5m
+          </div>
+
+          <button
+            onClick={onRun}
+            disabled={!canRun}
+            className="rounded-md bg-emerald-500 disabled:bg-neutral-700 disabled:text-neutral-400 text-black font-semibold px-4 py-2 text-sm"
+          >
+            {loading ? "RUNNING..." : "RUN"}
+          </button>
+        </div>
+      </div>
+
+      {(inferred.error || error) && (
+        <div className="px-3 pt-3">
+          <div className="rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+            {inferred.error || error}
+          </div>
+        </div>
+      )}
+
+      {/* Panels */}
+      <div className="flex-1 min-h-0 grid gap-3 p-3" style={{ gridTemplateColumns: "1fr 420px" }}>
+        {/* Left column */}
+        <div className="min-h-0 flex flex-col gap-3">
+          {/* Main Chart (candles only) */}
+          <div className="flex-1 min-h-0 bg-neutral-900 border border-neutral-800 rounded-lg p-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-neutral-200">Main Chart</div>
+              <div className="text-xs text-neutral-500">Candles: {candles.length}</div>
+            </div>
+            <div className="flex-1 min-h-0">
+              <ForexChart candles={candles} />
+            </div>
+          </div>
+
+          {/* Setup Detail (one setup per chart) */}
+          <div className="flex-1 min-h-0 bg-neutral-900 border border-neutral-800 rounded-lg p-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-neutral-200">Setup Detail</div>
+                <div className="text-xs text-neutral-500">
+                  {selectedSetup ? (
+                    <>
+                      {formatTime(selectedSetup.time)} · {selectedSetup.direction} · Streak {selectedSetup.streak_length} · PB{" "}
+                      {selectedSetup.pullback_length} · Target {Number(selectedSetup.target).toFixed(5)}
+                      {selectedTrade ? " · Trade: YES" : " · Trade: NO"}
+                    </>
+                  ) : (
+                    "Click a setup to open a dedicated chart."
+                  )}
+                </div>
+              </div>
+
+              {selectedSetup && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedSetup(null)}
+                  className="shrink-0 rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-800/60"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+
+            <div className="flex-1 min-h-0 border border-neutral-800 rounded-md overflow-hidden bg-neutral-950">
+              {selectedSetup ? (
+                <SetupDetailChart candles={candles} setup={selectedSetup} trade={selectedTrade} />
+              ) : (
+                <div className="h-full w-full flex items-center justify-center text-sm text-neutral-500">
+                  No setup selected.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Right column: Setup Explorer */}
+        <div className="min-h-0 bg-neutral-900 border border-neutral-800 rounded-lg p-3 flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold text-neutral-200">Setup Explorer</div>
+            <div className="text-xs text-neutral-500">
+              Setups: {sortedSetups.length} · Trades: {trades.length}
+            </div>
+          </div>
+
+          {sortedSetups.length === 0 ? (
+            <div className="text-sm text-neutral-500 px-1 py-6">No setups.</div>
+          ) : (
+            <div className="flex-1 min-h-0 overflow-auto border border-neutral-800 rounded-md">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-neutral-900 border-b border-neutral-800 text-neutral-400">
+                  <tr>
+                    <th className="text-left font-medium px-3 py-2">#</th>
+                    <th className="text-left font-medium px-3 py-2">Time</th>
+                    <th className="text-left font-medium px-3 py-2">Dir</th>
+                    <th className="text-right font-medium px-3 py-2">Streak</th>
+                    <th className="text-right font-medium px-3 py-2">PB</th>
+                    <th className="text-right font-medium px-3 py-2">Target</th>
+                    <th className="text-right font-medium px-3 py-2">Trade</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedSetups.map((s, idx) => {
+                    const isSelected = Number(selectedSetup?.time) === Number(s?.time);
+                    const hasTrade =
+                      (Array.isArray(trades) ? trades : []).find((t) => Number(t?.breaking_candle_time) === Number(s?.time)) != null;
+                    return (
+                      <tr
+                        key={`${s?.time}-${idx}`}
+                        className={[
+                          "border-t border-neutral-800 cursor-pointer",
+                          isSelected ? "bg-neutral-800/40" : "hover:bg-neutral-800/30",
+                        ].join(" ")}
+                        onClick={() => setSelectedSetup(s)}
+                      >
+                        <td className="px-3 py-2 text-neutral-300">{idx + 1}</td>
+                        <td className="px-3 py-2 text-neutral-300">
+                          <div className="text-xs text-neutral-500">{formatTime(s?.time)}</div>
+                          <div className="text-xs text-neutral-600">{s?.time}</div>
+                        </td>
+                        <td className={`px-3 py-2 font-semibold ${s?.direction === "BUY" ? "text-emerald-300" : "text-red-300"}`}>
+                          {s?.direction}
+                        </td>
+                        <td className="px-3 py-2 text-right text-neutral-300">{s?.streak_length}</td>
+                        <td className="px-3 py-2 text-right text-neutral-300">{s?.pullback_length}</td>
+                        <td className="px-3 py-2 text-right text-neutral-300">{Number(s?.target).toFixed(5)}</td>
+                        <td className="px-3 py-2 text-right text-neutral-300">{hasTrade ? "YES" : "NO"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

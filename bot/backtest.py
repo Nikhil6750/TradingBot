@@ -1,244 +1,175 @@
-# bot/backtest.py
-import math
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Literal, Protocol, Sequence
+
 import numpy as np
 import pandas as pd
 
-# ----------------------- internal helpers -----------------------
-def _prepare(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize columns and parse timestamp if present."""
+
+@dataclass(frozen=True, slots=True)
+class Trade:
+    entry_time: pd.Timestamp
+    entry_price: float
+    exit_time: pd.Timestamp
+    exit_price: float
+    direction: Literal["long", "short"]
+    streak_length: int
+    pullback_length: int
+    target: float
+    explanation: str
+
+    def to_dict(self) -> dict:
+        return {
+            "entry_time": _to_epoch_seconds(self.entry_time),
+            "entry_price": float(self.entry_price),
+            "exit_time": _to_epoch_seconds(self.exit_time),
+            "exit_price": float(self.exit_price),
+            "direction": self.direction,
+            "streak_length": int(self.streak_length),
+            "pullback_length": int(self.pullback_length),
+            "target": float(self.target),
+            "explanation": str(self.explanation),
+        }
+
+
+class Strategy(Protocol):
+    def generate_trades(self, candles: pd.DataFrame) -> list[Trade]:
+        """
+        Input: Candle Series DataFrame with columns:
+          time (UTC tz-aware), open, high, low, close, volume
+        Output: Closed trades only (every trade must include both entry and exit).
+        """
+
+
+class NoStrategy:
+    def generate_trades(self, candles: pd.DataFrame) -> list[Trade]:
+        return []
+
+
+def _to_utc_time(series: pd.Series, tz_name: str) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(series):
+        v = pd.to_numeric(series, errors="coerce").astype("float64")
+        finite = v[np.isfinite(v)]
+        mx = float(finite.max()) if finite.size else 0.0
+        unit = "s" if mx < 1e11 else ("ms" if mx < 1e14 else "ns")
+        return pd.to_datetime(v, unit=unit, utc=True, errors="coerce")
+
+    dt = pd.to_datetime(series, utc=False, errors="coerce")
+    if getattr(dt.dt, "tz", None) is not None:
+        return dt.dt.tz_convert("UTC")
+    return dt.dt.tz_localize(tz_name or "UTC", nonexistent="shift_forward", ambiguous="NaT").dt.tz_convert("UTC")
+
+
+def candles_from_dataframe(df: pd.DataFrame, tz_name: str = "UTC") -> pd.DataFrame:
+    """
+    CSV → Candle Series
+
+    Produces a normalized candle series DataFrame with:
+      time (UTC tz-aware), open, high, low, close, volume
+    """
     if df is None or df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
 
-    # Lowercase aliases for OHLC
-    cols = {c.lower(): c for c in df.columns}
-    need = ["open", "high", "low", "close"]
-    for n in need:
-        if n not in cols:
-            raise ValueError(f"missing OHLC column: {n}")
+    cols = {str(c).strip().lower(): c for c in df.columns}
+    time_col = cols.get("time") or cols.get("timestamp") or cols.get("date") or cols.get("datetime")
+    if not time_col:
+        raise ValueError("CSV must have a time column (time|timestamp|date|datetime).")
 
-    # Try to find a time-like column and standardize to 'timestamp'
-    tcol = None
-    for cand in ("timestamp", "time", "date", "Datetime", "Date"):
-        if cand in df.columns:
-            tcol = cand
-            break
+    def _col(name: str) -> str:
+        c = cols.get(name)
+        if not c:
+            raise ValueError(f"CSV missing required column: {name}")
+        return c
 
-    out = df.rename(columns={
-        cols["open"]: "open",
-        cols["high"]: "high",
-        cols["low"]:  "low",
-        cols["close"]: "close",
-    }).copy()
+    open_col = _col("open")
+    high_col = _col("high")
+    low_col = _col("low")
+    close_col = _col("close")
+    volume_col = cols.get("volume") or cols.get("vol")
 
-    if tcol:
-        out = out.rename(columns={tcol: "timestamp"})
-        out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
-
-    # Ensure numeric
-    for c in ["open","high","low","close"]:
-        out[c] = pd.to_numeric(out[c], errors="coerce")
-
-    return out.dropna(subset=["open","high","low","close"]).reset_index(drop=True)
-
-
-def _ensure_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ATR_14 if missing. (Wilder ATR via EWM)"""
-    if "ATR_14" not in df.columns:
-        high = df["high"].astype(float)
-        low  = df["low"].astype(float)
-        close = df["close"].astype(float)
-        prev_close = close.shift(1)
-        tr = pd.concat([
-            (high - low).abs(),
-            (high - prev_close).abs(),
-            (low  - prev_close).abs()
-        ], axis=1).max(axis=1)
-        df["ATR_14"] = tr.ewm(alpha=1/14, adjust=False, min_periods=14).mean()
-    return df
-
-
-def _fallback_score_and_direction(df: pd.DataFrame) -> pd.DataFrame:
-    """If your pipeline didn't precompute score/direction, create a simple one."""
-    if "score" in df.columns and "direction" in df.columns:
-        return df
-
-    ema20 = df["close"].ewm(span=20, adjust=False).mean()
-    ema50 = df["close"].ewm(span=50, adjust=False).mean()
-    mom_up = (df["close"] > ema20).astype(int)
-    dist = (df["close"] - ema20)
-    scale = df["close"].rolling(20).std().replace(0, np.nan)
-    sc = 50 + 50 * (dist / scale).clip(-1, 1)
-    df["score"] = sc.fillna(50)
-    df["direction"] = np.where(
-        (mom_up == 1) & (ema20 > ema50), "BUY",
-        np.where((mom_up == 0) & (ema20 < ema50), "SELL", "HOLD")
+    out = pd.DataFrame(
+        {
+            "time": _to_utc_time(df[time_col], tz_name),
+            "open": pd.to_numeric(df[open_col], errors="coerce"),
+            "high": pd.to_numeric(df[high_col], errors="coerce"),
+            "low": pd.to_numeric(df[low_col], errors="coerce"),
+            "close": pd.to_numeric(df[close_col], errors="coerce"),
+            "volume": pd.to_numeric(df[volume_col], errors="coerce") if volume_col else 0.0,
+        }
     )
-    return df
+
+    out = out.dropna(subset=["time", "open", "high", "low", "close"])
+    out = out.sort_values("time").reset_index(drop=True)
+    out["volume"] = out["volume"].fillna(0.0).astype(float)
+    return out
 
 
-# ----------------------- public API ------------------------------
-def backtest(
-    df: pd.DataFrame,
-    threshold: float = 65,
-    atr_mult: float = 1.8,
-    rr: float = 1.5,
-    max_bars: int = 100000,
-    session_filter: tuple[int, int] | None = None,  # e.g., (9, 16) local hours
-    tz_offset_hours: float = 0.0,                   # shift timestamps for session check
-) -> pd.DataFrame:
+def run_backtest(candles: pd.DataFrame, strategy: Strategy | None = None) -> list[Trade]:
     """
-    Deterministic bar-by-bar simulator (single position).
-    - Enter on next bar's open when score >= threshold.
-    - SL/TP from ATR_14 * atr_mult and rr.
-    - Intrabar check: SL first (conservative), then TP.
-    Returns trades DataFrame with:
-      entry_time, exit_time, entry_price, exit_price, direction, sl, tp, outcome
+    Candle Series → Strategy → Trades
+
+    Trades must always include both entry and exit.
     """
+    impl = strategy or NoStrategy()
+    trades = impl.generate_trades(candles)
 
-    df = _prepare(df)
-    if df.empty or len(df) < 50:
-        return pd.DataFrame(columns=[
-            "entry_time","exit_time","entry_price","exit_price",
-            "direction","sl","tp","outcome"
-        ])
+    for t in trades:
+        if t.entry_time is None or t.exit_time is None:
+            raise ValueError("Invalid trade: missing entry_time or exit_time.")
+        if not np.isfinite(float(t.entry_price)) or not np.isfinite(float(t.exit_price)):
+            raise ValueError("Invalid trade: entry_price/exit_price must be finite numbers.")
+        if t.direction not in ("long", "short"):
+            raise ValueError("Invalid trade: direction must be 'long' or 'short'.")
+        if int(t.streak_length) < 4:
+            raise ValueError("Invalid trade: streak_length must be >= 4.")
+        if int(t.pullback_length) not in (1, 2):
+            raise ValueError("Invalid trade: pullback_length must be 1 or 2.")
+        if not np.isfinite(float(t.target)):
+            raise ValueError("Invalid trade: target must be a finite number.")
+        if not str(t.explanation).strip():
+            raise ValueError("Invalid trade: explanation is required.")
 
-    df = _ensure_indicators(df)
-    df = _fallback_score_and_direction(df)
-
-    trades = []
-    in_pos = False
-    entry_i = entry_px = sl = tp = direction = None
-
-    # Warmup until ATR valid
-    first_idx = df["ATR_14"].first_valid_index()
-    start = max(14, int(first_idx) if first_idx is not None else 14)
-    end = min(len(df) - 2, start + max_bars)  # leave space for next-bar entry
-
-    for i in range(start, end):
-        # If in a trade, check exits on current bar
-        if in_pos:
-            hi, lo = float(df.at[i, "high"]), float(df.at[i, "low"])
-            if direction == "BUY":
-                if lo <= sl:
-                    exit_px, outcome = sl, "LOSS"
-                elif hi >= tp:
-                    exit_px, outcome = tp, "WIN"
-                else:
-                    continue
-            else:  # SELL
-                if hi >= sl:
-                    exit_px, outcome = sl, "LOSS"
-                elif lo <= tp:
-                    exit_px, outcome = tp, "WIN"
-                else:
-                    continue
-
-            trades.append({
-                "entry_time": df.at[entry_i, "timestamp"] if "timestamp" in df.columns else entry_i,
-                "exit_time":  df.at[i, "timestamp"] if "timestamp" in df.columns else i,
-                "entry_price": float(entry_px),
-                "exit_price": float(exit_px),
-                "direction": direction,
-                "sl": float(sl),
-                "tp": float(tp),
-                "outcome": outcome
-            })
-            in_pos = False
-            entry_i = entry_px = sl = tp = direction = None
-            continue
-
-        # Evaluate signal on bar i; we will enter at next bar's open (i+1).
-        sc = float(df.at[i, "score"])
-        dirn = str(df.at[i, "direction"]).upper()
-        if sc >= float(threshold) and dirn in ("BUY", "SELL"):
-            if i + 1 >= len(df):
-                break
-
-            # Session filter applies to the **entry bar** hour (i+1) after TZ shift
-            if session_filter and "timestamp" in df.columns:
-                ts_next = df.at[i+1, "timestamp"]
-                if pd.notna(ts_next):
-                    adj = ts_next + pd.to_timedelta(tz_offset_hours, unit="h")
-                    h0, h1 = session_filter
-                    hr = int(adj.hour)
-                    if not (h0 <= hr <= h1):
-                        # Skip this signal because entry would occur outside session
-                        continue
-
-            atr = float(df.at[i, "ATR_14"])
-            if not math.isfinite(atr) or atr <= 0:
-                continue
-
-            entry_px = float(df.at[i+1, "open"])  # next bar open
-            if dirn == "BUY":
-                sl = entry_px - atr * float(atr_mult)
-                tp = entry_px + atr * float(atr_mult) * float(rr)
-            else:
-                sl = entry_px + atr * float(atr_mult)
-                tp = entry_px - atr * float(atr_mult) * float(rr)
-
-            in_pos = True
-            entry_i = i + 1
-            direction = dirn
-
-    # If last trade is still open, expire at last close
-    if in_pos:
-        last_i = len(df) - 1
-        trades.append({
-            "entry_time": df.at[entry_i, "timestamp"] if "timestamp" in df.columns else entry_i,
-            "exit_time":  df.at[last_i, "timestamp"] if "timestamp" in df.columns else last_i,
-            "entry_price": float(entry_px),
-            "exit_price": float(df.at[last_i, "close"]),
-            "direction": direction,
-            "sl": float(sl),
-            "tp": float(tp),
-            "outcome": "EXPIRED"
-        })
-
-    return pd.DataFrame(trades, columns=[
-        "entry_time","exit_time","entry_price","exit_price",
-        "direction","sl","tp","outcome"
-    ])
+    return trades
 
 
-def summarize_results(trades_df: pd.DataFrame) -> None:
-    """Print compact metrics from a trades DataFrame."""
-    if trades_df is None or trades_df.empty:
-        print("\n=== Backtest Summary ===\nNo trades.")
-        return
+def compute_metrics(trades: Sequence[Trade]) -> dict:
+    """
+    Trades → Metrics
+    """
+    return {"trades": int(len(trades))}
 
-    total = len(trades_df)
-    wins = int((trades_df["outcome"] == "WIN").sum())
-    losses = int((trades_df["outcome"] == "LOSS").sum())
-    expired = int((trades_df["outcome"] == "EXPIRED").sum())
 
-    def r_mult(row):
-        entry, sl, exitp = float(row["entry_price"]), float(row["sl"]), float(row["exit_price"])
-        side = str(row["direction"]).upper()
-        risk = abs(entry - sl)
-        if risk <= 0 or not math.isfinite(risk):
-            return np.nan
-        gain = (exitp - entry) if side == "BUY" else (entry - exitp)
-        return gain / risk
+def trades_to_frame(trades: Sequence[Trade], symbol: str | None = None) -> pd.DataFrame:
+    rows = []
+    for t in trades:
+        r = asdict(t)
+        r["entry_time"] = pd.to_datetime(r["entry_time"], utc=True).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r["exit_time"] = pd.to_datetime(r["exit_time"], utc=True).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if symbol:
+            r["symbol"] = symbol
+        rows.append(r)
+    cols = [
+        "symbol",
+        "entry_time",
+        "entry_price",
+        "exit_time",
+        "exit_price",
+        "direction",
+        "streak_length",
+        "pullback_length",
+        "target",
+        "explanation",
+    ]
+    df = pd.DataFrame(rows)
+    for c in cols:
+        if c not in df.columns:
+            df[c] = None
+    return df[cols]
 
-    r = trades_df.apply(r_mult, axis=1)
-    r = r[np.isfinite(r)]
 
-    if len(r):
-        avg_r = float(r.mean())
-        gross_win = float(r[r > 0].sum())
-        gross_loss = float(-r[r < 0].sum())
-        pf = (gross_win / gross_loss) if gross_loss > 0 else float("inf")
-        net_r = gross_win - gross_loss
-    else:
-        avg_r = pf = net_r = 0.0
-
-    win_rate = (wins / total * 100.0) if total else 0.0
-
-    print("\n=== Backtest Summary ===")
-    print(f"Trades       : {total}")
-    print(f"Wins/Losses  : {wins}/{losses}  Expired: {expired}")
-    print(f"Win Rate     : {win_rate:.2f}%")
-    print(f"Avg R        : {avg_r:.3f}")
-    print(f"ProfitFactor : {pf:.3f}")
-    print(f"Net R        : {net_r:.3f}")
+def _to_epoch_seconds(ts: pd.Timestamp) -> int:
+    t = pd.to_datetime(ts, utc=True, errors="coerce")
+    if pd.isna(t):
+        return 0
+    return int(t.value // 1_000_000_000)

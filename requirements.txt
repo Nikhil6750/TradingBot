@@ -1,15 +1,4 @@
-pandas
 numpy
-ta
-python-telegram-bot
+pandas
 python-dotenv
-yfinance
-psycopg2-binary
-streamlit
-matplotlib
-python-dateutil
-pytz
-requests
-beautifulsoup4
-lxml
 pytest

@@ -7,9 +7,9 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app:delegated
-      # Mount data folder if needed, relative to root
-      - ./data:/data:delegated
+      - ./backend:/app/backend:delegated
+      - ./bot:/app/bot:delegated
+      - ./data:/app/data:delegated
       - ./.env:/app/.env:ro
     environment:
       - PYTHONUNBUFFERED=1
