@@ -5,7 +5,7 @@ import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Final, List
+from typing import Final, List, Optional, Union
 
 EXPECTED_COLUMNS: Final[list[str]] = ["timestamp", "open", "high", "low", "close", "volume"]
 _PATTERN_ALERT_COLUMN: Final[str] = "pattern alert"
@@ -24,7 +24,7 @@ def _normalize_header(value: str) -> str:
     return v
 
 
-def _parse_pattern_alert(value: str) -> bool | str | None:
+def _parse_pattern_alert(value: str) -> Optional[Union[bool, str]]:
     v = str(value or "").strip()
     if not v:
         return None
@@ -88,7 +88,7 @@ def load_candles_from_csv_path(csv_path: Path) -> List[dict]:
         raise CandleCSVError(f"Expected a file but found: {csv_path}")
 
     candles: list[dict] = []
-    prev_ts: int | None = None
+    prev_ts: Optional[int] = None
 
     try:
         with csv_path.open("r", encoding="utf-8", newline="") as f:
@@ -189,7 +189,7 @@ def load_candles_from_csv_path(csv_path: Path) -> List[dict]:
                 if not all(map(math.isfinite, (o, h, l, c, v))):
                     raise CandleCSVError(f"Non-finite OHLCV value in {csv_path} at line {line_no}")
 
-                pattern_alert: bool | str | None = None
+                pattern_alert: Optional[Union[bool, str]] = None
                 if pattern_idx is not None:
                     raw = str(row[pattern_idx]).strip() if pattern_idx < len(row) else ""
                     pattern_alert = _parse_pattern_alert(raw)

@@ -1,39 +1,49 @@
 from __future__ import annotations
 
 import os
-import re
-import shutil
 import sys
-import tempfile
-from pathlib import Path
-from typing import Final
-
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-# Ensure repository root is importable (for `bot.*`)
+# Ensure repository root is importable
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from backend.data_loader import CandleCSVError, load_candles_from_csv_path
-from backend.gap_handling import generate_trades_and_setups_with_gap_resets
+app = FastAPI(title="AlgoTradeX API", version="2.0.0")
 
-_INVALID_FILENAME_MSG: Final[str] = "Invalid CSV filename format"
-_PAIR_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9]+$")
+# ── CORS Middleware ─────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Backtest API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ── Startup: initialise DB tables ─────────────────────────────────────────────
+from backend.database.database import init_db
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
+# ── Routers ───────────────────────────────────────────────────────────────────
+from backend.api.replay_routes import router as replay_router
+from backend.api.backtest_routes import router as backtest_router
+from backend.api.setup_routes import router as setup_router
+
+app.include_router(replay_router)
+app.include_router(backtest_router)
+app.include_router(setup_router)
+
+# ── Exception Handlers ────────────────────────────────────────────────────────
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(_request: Request, exc: RequestValidationError):
     return JSONResponse(
@@ -41,79 +51,33 @@ async def request_validation_exception_handler(_request: Request, exc: RequestVa
         content={"error": "Invalid input", "details": exc.errors()},
     )
 
-
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_request: Request, exc: HTTPException):
     detail = exc.detail
     msg = detail if isinstance(detail, str) else str(detail)
     return JSONResponse(status_code=exc.status_code, content={"error": msg})
 
-
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(_request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"error": str(exc)})
 
-
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True}
+    return {"status": "ok"}
 
+from backend.api.strategy_routes import router as strategy_router
+from backend.api.market_data_routes import router as market_data_router
+from backend.api.session_routes import router as session_router
+# from backend.api.symbol_routes import router as symbol_router
 
-@app.post("/run-backtest")
-async def run_backtest(file: UploadFile = File(...)):
-    try:
-        market, pair = _infer_market_pair_from_filename(file.filename)
-    except ValueError:
-        raise HTTPException(400, _INVALID_FILENAME_MSG)
+app.include_router(strategy_router)
+app.include_router(market_data_router)
+from backend.api.dataset_routes import router as dataset_router
+app.include_router(dataset_router)
+app.include_router(session_router)
+# app.include_router(symbol_router)
 
-    try:
-        with tempfile.TemporaryDirectory(prefix="algotradex_upload_") as tmp:
-            tmp_path = Path(tmp)
-            csv_path = tmp_path / "uploaded.csv"
-            await file.seek(0)
-            with csv_path.open("wb") as out:
-                shutil.copyfileobj(file.file, out)
-            if csv_path.stat().st_size <= 0:
-                raise HTTPException(400, "Empty CSV")
-            candles = load_candles_from_csv_path(csv_path)
-    except CandleCSVError as e:
-        raise HTTPException(400, str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, str(e))
+if __name__ == "__main__":
+    import uvicorn
 
-    try:
-        trades, setups = generate_trades_and_setups_with_gap_resets(candles)
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-    return {"candles": candles, "setups": setups, "trades": trades}
-
-
-def _infer_market_pair_from_filename(filename: str | None) -> tuple[str, str]:
-    name = Path(str(filename or "")).name
-    if not name:
-        raise ValueError(_INVALID_FILENAME_MSG)
-
-    # Require a .csv extension (case-insensitive).
-    if Path(name).suffix.lower() != ".csv":
-        raise ValueError(_INVALID_FILENAME_MSG)
-
-    stem = name[: -len(".csv")]
-
-    if stem.startswith("FX_"):
-        market = "forex"
-        rest = stem[len("FX_") :]
-    elif stem.startswith("BINANCE_"):
-        market = "crypto"
-        rest = stem[len("BINANCE_") :]
-    else:
-        raise ValueError(_INVALID_FILENAME_MSG)
-
-    pair = rest.split("_", 1)[0]
-    if not pair:
-        raise ValueError(_INVALID_FILENAME_MSG)
-    if not _PAIR_RE.match(pair):
-        raise ValueError(_INVALID_FILENAME_MSG)
-    return market, pair
+    uvicorn.run("backend.server:app", host="127.0.0.1", port=8000, reload=True)

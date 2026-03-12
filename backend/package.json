@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "ccxt": "^4.5.42",
+    "yfinance": "^0.0.6"
+  }
+}

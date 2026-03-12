@@ -16,7 +16,7 @@ class _State(str, Enum):
     AWAIT_CONFIRMATION = "AWAIT_CONFIRMATION"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _PendingSetup:
     streak_dir: int  # 1 bullish, -1 bearish
     streak_length: int

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Trade:
     entry_time: pd.Timestamp
     entry_price: float

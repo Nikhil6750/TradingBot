@@ -9,7 +9,7 @@ import pandas as pd
 from bot.backtest import Trade
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class LockedStreakPullbackStrategy:
     allow_long: bool = True
     allow_short: bool = True

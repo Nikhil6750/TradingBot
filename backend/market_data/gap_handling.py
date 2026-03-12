@@ -6,7 +6,6 @@ from bot.strategy_engine import generate_trades, generate_trades_and_setups
 
 EXPECTED_STEP_SECONDS: Final[int] = 300
 
-
 def split_candles_on_gaps(candles: List[dict], *, expected_step_seconds: int = EXPECTED_STEP_SECONDS) -> List[List[dict]]:
     if not candles:
         return []

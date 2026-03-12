@@ -1,17 +1,5 @@
-# Python
 venv/
-__pycache__/
-*.pyc
-
-# Node
 node_modules/
-
-# Environment
+__pycache__/
+*.db
 .env
-
-# Outputs
-output/
-
-# Mac/Windows system files
-.DS_Store
-Thumbs.db
